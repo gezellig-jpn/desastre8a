@@ -77,14 +77,16 @@
       if (!list) return;
       list.innerHTML = '';
       PARTICIPANTS.forEach(name => {
-        const taken = !!claimed[sanitizeKey(name)];
-        const dead  = !!eliminated[sanitizeKey(name)];
-        const btn   = document.createElement('button');
-        btn.className = 'participant-btn' + (dead ? ' dead' : taken ? ' taken' : '');
+        const key    = sanitizeKey(name);
+        const dead   = eliminated[key] === 'killed';
+        const caught = eliminated[key] === 'caught';
+        const out    = dead || caught;
+        const btn    = document.createElement('button');
+        btn.className = 'participant-btn' + (out ? ' dead' : '');
         btn.innerHTML = dead
           ? `<span>${name}</span><span class="lock-icon">💀</span>`
-          : taken
-            ? `<span>${name}</span><span class="lock-icon">🔒</span>`
+          : caught
+            ? `<span>${name}</span><span class="lock-icon">🔍</span>`
             : `<span>${name}</span>`;
         btn.onclick = () => selectParticipant(name);
         list.appendChild(btn);
