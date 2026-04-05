@@ -93,6 +93,15 @@
         btn.onclick = () => selectParticipant(name);
         list.appendChild(btn);
       });
+      // Si la última fila tiene 2 elementos (26 % 3 == 2), añadir spacer al principio de esa fila
+      const remainder = PARTICIPANTS.length % 3;
+      if (remainder === 2) {
+        const spacer = document.createElement('div');
+        spacer.className = 'grid-spacer';
+        // Insertar el spacer antes de los dos últimos botones
+        const buttons = list.querySelectorAll('.participant-btn');
+        list.insertBefore(spacer, buttons[buttons.length - 2]);
+      }
     }
 
     // ── SELECCIÓN ────────────────────────────────────────────────
@@ -549,53 +558,49 @@
     }
     .btn-back-home:hover { opacity: 1; }
 
-    .success-icon {
-      font-size: 48px;
-      animation: pulse 2s ease infinite;
-    }
-    @keyframes pulse {
-      0%,100% { transform: scale(1); opacity: 1; }
-      50%      { transform: scale(1.1); opacity: 0.8; }
-    }
     .success-name {
       font-family: 'Playfair Display', serif;
-      font-size: 28px;
+      font-size: 38px;
       color: var(--gold);
-      font-weight: 700;
+      font-weight: 900;
+      text-shadow: 0 0 40px rgba(201,168,76,0.4);
+      letter-spacing: -0.01em;
     }
-    .success-role {
-      font-size: 13px;
-      letter-spacing: 0.3em;
-      text-transform: uppercase;
-      color: var(--gold);
-      opacity: 0.6;
-    }
-    .success-text {
-      font-style: italic;
-      color: var(--parchment-dark);
-      font-size: 16px;
-      line-height: 1.7;
-      max-width: 340px;
-    }
-    .secret-card {
+
+    .game-explanation {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      text-align: left;
       width: 100%;
+    }
+
+    .game-text {
+      font-size: 15px;
+      line-height: 1.75;
+      color: var(--parchment-dark);
+      font-style: italic;
+    }
+    .game-text strong {
+      color: var(--parchment);
+      font-style: normal;
+    }
+
+    .game-warning {
       border: 1px solid rgba(201,168,76,0.3);
-      padding: 24px;
+      padding: 18px 20px;
       background: rgba(201,168,76,0.04);
+      text-align: center;
     }
-    .secret-card-label {
-      font-size: 10px;
-      letter-spacing: 0.3em;
-      text-transform: uppercase;
-      color: var(--gold);
-      opacity: 0.5;
-      margin-bottom: 10px;
-    }
-    .secret-content {
+    .game-warning p {
       font-family: 'Playfair Display', serif;
-      font-size: 17px;
+      font-size: 15px;
       color: var(--parchment);
       line-height: 1.6;
+      font-style: italic;
+    }
+    .game-warning strong {
+      font-style: normal;
     }
 
     /* Admin panel */
@@ -713,13 +718,34 @@
 <!-- PANTALLA 3: Bienvenida -->
 <div class="success-screen" id="screen-success">
   <button class="btn-back-home" onclick="goBackFromSuccess()">← Volver al inicio</button>
-  <div class="success-icon">🔍</div>
-  <p class="success-role">Participante identificado</p>
+
   <p class="success-name" id="success-name"></p>
-  <p class="success-text" id="success-text"></p>
-  <div class="secret-card">
-    <p class="secret-card-label">Tu misión esta noche</p>
-    <p class="secret-content" id="success-mission"></p>
+
+  <div class="divider" style="width:100%">
+    <div class="divider-line"></div>
+    <span class="divider-icon">🔍</span>
+    <div class="divider-line"></div>
+  </div>
+
+  <div class="game-explanation">
+    <p class="game-text">
+      Durante todo el día tendrás un <strong>objetivo</strong> al cual lo tendrás que matar
+      en un <strong>sitio determinado</strong> con un <strong>arma determinada</strong>,
+      asignados aleatoriamente.
+    </p>
+    <p class="game-text">
+      Cuando lo mates, deberás mostrarle tu objeto y lugar para confirmar que la muerte es válida.
+      En ese entonces pondrás el código de la persona para tener su objetivo.
+    </p>
+    <div class="game-warning">
+      <p><strong>"Asesina con cuidado, si alguien te descubre, tú también morirás,
+      esa persona deberá adivinar tus tres objetivos."</strong></p>
+    </div>
+  </div>
+
+  <div class="secret-card" id="mission-card" style="display:none">
+    <p class="secret-card-label">Tu misión — Pendiente de inicio</p>
+    <p class="secret-content">El juego aún no ha comenzado. En cuanto el organizador lo active, aquí aparecerán tu objetivo, tu arma y tu lugar.</p>
   </div>
 
   <!-- ADMIN PANEL — solo visible para Javi Sanjuán -->
