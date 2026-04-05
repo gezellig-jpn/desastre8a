@@ -1,5 +1,4 @@
 <!DOCTYPE html>
-
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
@@ -8,7 +7,6 @@
   <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;0,900;1,400&family=Crimson+Text:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet" />
 
   <!-- Firebase SDK -->
-
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
     import { getDatabase, ref, onValue, update, push } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
@@ -166,10 +164,6 @@
       document.getElementById('screen-select').style.display = 'none';
       document.getElementById('screen-code').classList.remove('visible');
       document.getElementById('success-name').textContent = name;
-      document.getElementById('success-text').textContent =
-        `Bienvenido/a a la finca, ${name}. La noche acaba de empezar.`;
-      document.getElementById('success-mission').textContent =
-        'Investiga. Desconfía. Sé el último en pie.';
       document.getElementById('screen-success').classList.add('visible');
 
       // Si es Javi Sanjuán, mostrar panel admin automáticamente
@@ -668,7 +662,6 @@
       50%      { opacity: 0.4; }
     }
   </style>
-
 </head>
 <body>
 
@@ -686,76 +679,74 @@
     <h1 class="title">Desastre del 8A</h1>
     <p class="subtitle">El cumpleaños de Tom</p>
 
-```
-<div class="divider">
-  <div class="divider-line"></div>
-  <span class="divider-icon">🔍</span>
-  <div class="divider-line"></div>
-</div>
-
-<!-- PANTALLA 1: Selección -->
-<div id="screen-select">
-  <p class="intro">
-    Ha habido una amenaza de que en esta finca algo terrible va a pasar hoy,
-    los invitados han recibido unas directrices:<br><br>
-    <strong>"Ser el último en pie."</strong>
-  </p>
-  <p class="list-label">¿Quién eres tú?</p>
-  <div class="participants-grid" id="participants-list"></div>
-</div>
-
-<!-- PANTALLA 2: Código -->
-<div class="code-panel" id="screen-code">
-  <p class="code-message" id="code-message"></p>
-  <div class="code-input-wrap">
-    <input type="password" class="code-input" id="code-input" maxlength="4" placeholder="····" inputmode="numeric" />
-    <button class="btn-confirm" onclick="checkCode()">Entrar</button>
-  </div>
-  <p class="error-msg" id="error-msg">Código incorrecto. Intento registrado.</p>
-  <button class="btn-back" onclick="goBack()">← Volver</button>
-</div>
-
-<!-- PANTALLA 3: Bienvenida -->
-<div class="success-screen" id="screen-success">
-  <button class="btn-back-home" onclick="goBackFromSuccess()">← Volver al inicio</button>
-
-  <p class="success-name" id="success-name"></p>
-
-  <div class="divider" style="width:100%">
-    <div class="divider-line"></div>
-    <span class="divider-icon">🔍</span>
-    <div class="divider-line"></div>
-  </div>
-
-  <div class="game-explanation">
-    <p class="game-text">
-      Durante todo el día tendrás un <strong>objetivo</strong> al cual lo tendrás que matar
-      en un <strong>sitio determinado</strong> con un <strong>arma determinada</strong>,
-      asignados aleatoriamente.
-    </p>
-    <p class="game-text">
-      Cuando lo mates, deberás mostrarle tu objeto y lugar para confirmar que la muerte es válida.
-      En ese entonces pondrás el código de la persona para tener su objetivo.
-    </p>
-    <div class="game-warning">
-      <p><strong>"Asesina con cuidado, si alguien te descubre, tú también morirás,
-      esa persona deberá adivinar tus tres objetivos."</strong></p>
+    <div class="divider">
+      <div class="divider-line"></div>
+      <span class="divider-icon">🔍</span>
+      <div class="divider-line"></div>
     </div>
-  </div>
 
-  <div class="secret-card" id="mission-card" style="display:none">
-    <p class="secret-card-label">Tu misión — Pendiente de inicio</p>
-    <p class="secret-content">El juego aún no ha comenzado. En cuanto el organizador lo active, aquí aparecerán tu objetivo, tu arma y tu lugar.</p>
-  </div>
+    <!-- PANTALLA 1: Selección -->
+    <div id="screen-select">
+      <p class="intro">
+        Ha habido una amenaza de que en esta finca algo terrible va a pasar hoy,
+        los invitados han recibido unas directrices:<br><br>
+        <strong>"Ser el último en pie."</strong>
+      </p>
+      <p class="list-label">¿Quién eres tú?</p>
+      <div class="participants-grid" id="participants-list"></div>
+    </div>
 
-  <!-- ADMIN PANEL — solo visible para Javi Sanjuán -->
-  <div class="admin-panel" id="admin-panel">
-    <p class="admin-title">✦ Registro de accesos ✦</p>
-    <div id="log-list"></div>
-    <button class="btn-reset" onclick="resetGame()">⚠ Resetear todos los accesos</button>
-  </div>
-</div>
-```
+    <!-- PANTALLA 2: Código -->
+    <div class="code-panel" id="screen-code">
+      <p class="code-message" id="code-message"></p>
+      <div class="code-input-wrap">
+        <input type="password" class="code-input" id="code-input" maxlength="4" placeholder="····" inputmode="numeric" />
+        <button class="btn-confirm" onclick="checkCode()">Entrar</button>
+      </div>
+      <p class="error-msg" id="error-msg">Código incorrecto. Intento registrado.</p>
+      <button class="btn-back" onclick="goBack()">← Volver</button>
+    </div>
+
+    <!-- PANTALLA 3: Bienvenida -->
+    <div class="success-screen" id="screen-success">
+      <button class="btn-back-home" onclick="goBackFromSuccess()">← Volver al inicio</button>
+
+      <p class="success-name" id="success-name"></p>
+
+      <div class="divider" style="width:100%">
+        <div class="divider-line"></div>
+        <span class="divider-icon">🔍</span>
+        <div class="divider-line"></div>
+      </div>
+
+      <div class="game-explanation">
+        <p class="game-text">
+          Durante todo el día tendrás un <strong>objetivo</strong> al cual lo tendrás que matar
+          en un <strong>sitio determinado</strong> con un <strong>arma determinada</strong>,
+          asignados aleatoriamente.
+        </p>
+        <p class="game-text">
+          Cuando lo mates, deberás mostrarle tu objeto y lugar para confirmar que la muerte es válida.
+          En ese entonces pondrás el código de la persona para tener su objetivo.
+        </p>
+        <div class="game-warning">
+          <p><strong>"Asesina con cuidado, si alguien te descubre, tú también morirás,
+          esa persona deberá adivinar tus tres objetivos."</strong></p>
+        </div>
+      </div>
+
+      <div class="secret-card" id="mission-card" style="display:none">
+        <p class="secret-card-label">Tu misión — Pendiente de inicio</p>
+        <p class="secret-content">El juego aún no ha comenzado. En cuanto el organizador lo active, aquí aparecerán tu objetivo, tu arma y tu lugar.</p>
+      </div>
+
+      <!-- ADMIN PANEL — solo visible para Javi Sanjuán -->
+      <div class="admin-panel" id="admin-panel">
+        <p class="admin-title">✦ Registro de accesos ✦</p>
+        <div id="log-list"></div>
+        <button class="btn-reset" onclick="resetGame()">⚠ Resetear todos los accesos</button>
+      </div>
+    </div>
 
   </div>
 </div>
