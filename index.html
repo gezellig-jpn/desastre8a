@@ -173,11 +173,10 @@
     // ── ELIMINADO — solo puede ver historial ─────────────────────
     function checkEliminated() {
       if (!currentPlayer) return;
-      const dead = !!eliminated[sanitizeKey(currentPlayer)];
-      const actionZone = document.getElementById('action-zone');
-      const deadNotice = document.getElementById('dead-notice');
-      actionZone.style.display = dead ? 'none' : 'block';
-      deadNotice.style.display = dead ? 'block' : 'none';
+      const val  = eliminated[sanitizeKey(currentPlayer)];
+      const dead = val === 'killed' || val === 'caught';
+      document.getElementById('action-zone').style.display = dead ? 'none' : 'flex';
+      document.getElementById('dead-notice').style.display = dead ? 'block' : 'none';
     }
 
     // ── MISIÓN — soporta múltiples objetivos (array 'objetivos') ──
@@ -211,7 +210,26 @@
         btnDet.style.display    = 'block';
 
         // Renderizar cada objetivo con su propio botón de confirmar muerte
-        container.innerHTML = mission.objetivos.map((obj, idx) => `
+        container.innerHTML = mission.objetivos.map((obj, idx) => {
+          // Buscar co-cazadores: otros jugadores vivos que comparten este mismo objetivo
+          const coHunters = PARTICIPANTS.filter(p => {
+            if (p === name) return false;
+            if (eliminated[sanitizeKey(p)]) return false;
+            const m = getMission(p);
+            return m && m.objetivos.some(o => o.objetivo === obj.objetivo);
+          });
+
+          const coHunterHTML = coHunters.length > 0
+            ? `<div class="cohunter-notice">
+                <span class="cohunter-icon">🤝</span>
+                <div>
+                  <div class="cohunter-label">También persigue a ${obj.objetivo}</div>
+                  <div class="cohunter-names">${coHunters.join(', ')}</div>
+                </div>
+               </div>`
+            : '';
+
+          return `
           <div class="objetivo-block" id="obj-block-${idx}">
             <div class="mission-rows">
               <div class="mission-row">
@@ -227,6 +245,7 @@
                 <div><div class="mission-label">Lugar</div><div class="mission-value">${obj.lugar}</div></div>
               </div>
             </div>
+            ${coHunterHTML}
             <div class="obj-death-wrap">
               <button class="btn-death" style="display:block;margin-top:0" onclick="toggleObjDeathPanel(${idx})">💀 Confirmar muerte</button>
               <div class="death-panel" id="obj-death-panel-${idx}">
@@ -242,7 +261,7 @@
             </div>
           </div>
           ${idx < mission.objetivos.length - 1 ? '<div class="obj-separator"></div>' : ''}
-        `).join('');
+        `}).join('');
 
         // Historial
         if (mission.history.length > 0) {
@@ -294,40 +313,53 @@
     };
 
     async function executeKill(killer, objIdx, victim, arma, lugar) {
-      const killerKey   = sanitizeKey(killer);
-      const victimKey   = sanitizeKey(victim);
-      const rawKiller   = missions[killerKey];
+      const killerKey     = sanitizeKey(killer);
+      const victimKey     = sanitizeKey(victim);
       const victimMission = getMission(victim);
       const now = new Date();
       const timeStr = now.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'});
       const dateStr = now.toLocaleDateString('es-ES',{day:'2-digit',month:'2-digit'});
 
-      // Nuevo objetivo heredado de la víctima (primer objetivo de la víctima)
-      const victimFirstObj = victimMission && victimMission.objetivos.length > 0
+      // Primer objetivo de la víctima (el que se hereda)
+      const inheritedObj = victimMission && victimMission.objetivos.length > 0
         ? victimMission.objetivos[0]
         : { objetivo: '— Sin objetivo —', arma: arma, lugar: lugar };
 
-      // Reconstruir array de objetivos: reemplazar el slot idx con el heredado
+      // 1. Actualizar misión del asesino — reemplazar slot idx con el heredado
       const currentMission = getMission(killer);
-      const newObjetivos = [...currentMission.objetivos];
-      newObjetivos[objIdx] = {
-        objetivo: victimFirstObj.objetivo,
-        arma:     victimFirstObj.arma,
-        lugar:    victimFirstObj.lugar,
-      };
-
-      const newHistory = [...currentMission.history, { victim, arma, lugar }];
-
-      // Guardar en Firebase en formato nuevo
+      const newObjetivos   = [...currentMission.objetivos];
+      newObjetivos[objIdx] = { objetivo: inheritedObj.objetivo, arma: inheritedObj.arma, lugar: inheritedObj.lugar };
+      const newHistory     = [...currentMission.history, { victim, arma, lugar }];
       await set(ref(db, `missions/${killerKey}`), { objetivos: newObjetivos, history: newHistory });
-      await update(ref(db, 'eliminated'), { [victimKey]: true });
-      push(ref(db, 'kills'), { killer, victim, arma, lugar, date: dateStr, time: timeStr });
+
+      // 2. Marcar víctima como eliminada
+      await update(ref(db, 'eliminated'), { [victimKey]: 'killed' });
+
+      // 3. Buscar a todos los demás que tenían a la víctima como objetivo y actualizarles SIN historial
+      const updates = {};
+      PARTICIPANTS.forEach(name => {
+        if (name === killer || name === victim) return;
+        const m = getMission(name);
+        if (!m) return;
+        const hasVictim = m.objetivos.some(o => o.objetivo === victim);
+        if (!hasVictim) return;
+        const updatedObjetivos = m.objetivos.map(o =>
+          o.objetivo === victim
+            ? { objetivo: inheritedObj.objetivo, arma: inheritedObj.arma, lugar: inheritedObj.lugar }
+            : o
+        );
+        updates[`missions/${sanitizeKey(name)}`] = { objetivos: updatedObjetivos, history: m.history };
+      });
+      if (Object.keys(updates).length > 0) await update(ref(db), updates);
+
+      // 4. Log y registro
+      push(ref(db,'kills'), { killer, victim, arma, lugar, date: dateStr, time: timeStr });
       writeLog(`${killer} eliminó a ${victim}`, '💀 Muerte');
 
-      // Overlay de confirmación
+      // 5. Overlay
       document.querySelectorAll('.death-panel').forEach(p => p.classList.remove('visible'));
       document.getElementById('death-success-name').textContent = victim;
-      document.getElementById('death-success-next').textContent = victimFirstObj.objetivo;
+      document.getElementById('death-success-next').textContent = inheritedObj.objetivo;
       document.getElementById('death-success-panel').classList.add('visible');
     }
 
@@ -396,7 +428,7 @@
         err.textContent = 'Incorrecto. Tu acusación era errónea... y ahora tú también morirás.';
         err.classList.add('visible');
         setTimeout(async () => {
-          await update(ref(db,'eliminated'), { [sanitizeKey(currentPlayer)]: true });
+          await update(ref(db,'eliminated'), { [sanitizeKey(currentPlayer)]: 'caught' });
           writeLog(`${currentPlayer} falló como detective`, '💀 Eliminado');
           document.getElementById('detective-panel').classList.remove('visible');
           showingDetective = false;
@@ -404,7 +436,7 @@
       }
     };
 
-    window.checkDetectiveCode = function() {
+    window.checkDetectiveCode = async function() {
       const val     = document.getElementById('detective-code-input').value;
       const input   = document.getElementById('detective-code-input');
       const err     = document.getElementById('detective-error');
@@ -431,22 +463,55 @@
         ? victimMission.objetivos[0]
         : { objetivo: '— Sin objetivo —', arma: arma, lugar: lugar };
 
+      const asesinMission   = getMission(asesino);
+      const asesinInherited = asesinMission && asesinMission.objetivos.length > 0
+        ? asesinMission.objetivos[0] : null;
+
       const currentObjetivos = myMission ? myMission.objetivos : [];
       const newObjetivos = [...currentObjetivos, extraObj];
       const newHistory   = [...(myMission ? myMission.history : []),
         { victim: `${victima} (víctima de ${asesino})`, arma: '(detective)', lugar: '(detective)' }
       ];
 
-      set(ref(db, `missions/${detKey}`), { objetivos: newObjetivos, history: newHistory });
-      update(ref(db, 'eliminated'), { [victimKey]: true, [asesinKey]: true });
-      push(ref(db, 'kills'), { killer: `${currentPlayer} (detective)`, victim: `${asesino} + ${victima}`, arma, lugar, date: dateStr, time: timeStr });
+      const allUpdates = {};
+      allUpdates[`missions/${detKey}`]       = { objetivos: newObjetivos, history: newHistory };
+      allUpdates[`eliminated/${victimKey}`]  = 'killed';
+      allUpdates[`eliminated/${asesinKey}`]  = 'caught';
+
+      // Redistribuir a quien tenía al asesino como objetivo → hereda primer obj del asesino
+      if (asesinInherited) {
+        PARTICIPANTS.forEach(name => {
+          if (name === currentPlayer || name === asesino || name === victima) return;
+          const m = getMission(name);
+          if (!m || !m.objetivos.some(o => o.objetivo === asesino)) return;
+          allUpdates[`missions/${sanitizeKey(name)}`] = {
+            objetivos: m.objetivos.map(o => o.objetivo === asesino ? asesinInherited : o),
+            history: m.history
+          };
+        });
+      }
+
+      // Redistribuir a quien tenía a la víctima como objetivo → hereda primer obj de la víctima
+      PARTICIPANTS.forEach(name => {
+        if (name === currentPlayer || name === asesino || name === victima) return;
+        const m = getMission(name);
+        if (!m || !m.objetivos.some(o => o.objetivo === victima)) return;
+        const existing = allUpdates[`missions/${sanitizeKey(name)}`];
+        const base = existing || { objetivos: m.objetivos, history: m.history };
+        allUpdates[`missions/${sanitizeKey(name)}`] = {
+          objetivos: base.objetivos.map(o => o.objetivo === victima ? extraObj : o),
+          history: base.history
+        };
+      });
+
+      await update(ref(db), allUpdates);
+      push(ref(db,'kills'), { killer: `${currentPlayer} (detective)`, victim: `${asesino} + ${victima}`, arma, lugar, date: dateStr, time: timeStr });
       writeLog(`${currentPlayer} pilló a ${asesino} matando a ${victima}`, '🔍 Detective');
 
       document.getElementById('detective-panel').classList.remove('visible');
       showingDetective = false;
       document.getElementById('btn-det-submit').style.display = 'block';
 
-      // Overlay — mostrar ambos nuevos objetivos
       const nextNames = newObjetivos.map(o => o.objetivo).join(' y ');
       document.getElementById('death-success-name').textContent = `${asesino} y ${victima}`;
       document.getElementById('death-success-next').textContent = nextNames;
@@ -592,6 +657,19 @@
     .obj-death-wrap { padding: 0 0 8px 0; display: flex; flex-direction: column; gap: 8px; }
     .objetivo-block { border-bottom: 1px solid rgba(201,168,76,0.1); }
     .objetivo-block:last-child { border-bottom: none; }
+
+    /* Co-cazador */
+    .cohunter-notice {
+      display: flex; align-items: flex-start; gap: 12px;
+      margin: 0 20px 14px; padding: 12px 14px;
+      background: rgba(201,168,76,0.06);
+      border: 1px solid rgba(201,168,76,0.2);
+      border-left: 3px solid rgba(201,168,76,0.5);
+      animation: fadeIn 0.4s ease;
+    }
+    .cohunter-icon { font-size: 18px; flex-shrink: 0; margin-top: 2px; }
+    .cohunter-label { font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--gold); opacity: 0.6; margin-bottom: 4px; }
+    .cohunter-names { font-family: 'Playfair Display', serif; font-size: 16px; color: var(--gold-light); font-weight: 700; }
 
     /* Mission card */
     .mission-card{width:100%;border:1px solid rgba(201,168,76,.35);background:rgba(201,168,76,.04);display:none;}
