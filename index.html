@@ -295,15 +295,7 @@
       to { opacity: 1; transform: translateY(0); }
     }
 
-    .card::before, .card::after {
-      content: '✦';
-      position: absolute;
-      color: var(--gold);
-      opacity: 0.4;
-      font-size: 12px;
-    }
-    .card::before { top: 14px; left: 18px; }
-    .card::after  { bottom: 14px; right: 18px; }
+    .card::before, .card::after { content: ''; }
 
     .eyebrow {
       text-align: center;
@@ -372,26 +364,17 @@
       margin-bottom: 12px;
     }
 
-    /* Grid 3 columnas, última fila centrada */
+    /* Centrar última fila — 26 participantes, última fila tiene 2 */
     .participants-grid {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
       gap: 7px;
       margin-bottom: 28px;
-      justify-items: stretch;
     }
-
-    /* Centrar última fila si tiene menos de 3 */
-    .participants-grid::after {
-      content: '';
-    }
-
-    /* Si quedan 2 en última fila: el primero de la última fila empieza en col 1 centrado */
-    .participant-btn:last-child:nth-child(3n - 1) {
-      grid-column: 2 / 3;
-    }
-    .participant-btn:last-child:nth-child(3n - 2) {
-      grid-column: 2 / 3;
+    /* Pseudo-elemento para empujar la última fila al centro cuando son 2 */
+    .grid-spacer {
+      visibility: hidden;
+      pointer-events: none;
     }
 
     .participant-btn {
@@ -709,7 +692,7 @@
 <div id="screen-select">
   <p class="intro">
     Ha habido una amenaza de que en esta finca algo terrible va a pasar hoy,
-    los invitados han recibido unas directrices.<br><br>
+    los invitados han recibido unas directrices:<br><br>
     <strong>"Ser el último en pie."</strong>
   </p>
   <p class="list-label">¿Quién eres tú?</p>
