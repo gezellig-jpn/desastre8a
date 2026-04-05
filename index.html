@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
@@ -7,11 +8,11 @@
   <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;0,900;1,400&family=Crimson+Text:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet" />
 
   <!-- Firebase SDK -->
+
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
     import { getDatabase, ref, onValue, update, push } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
 
-    // ── FIREBASE CONFIG ──────────────────────────────────────────
     const firebaseConfig = {
       databaseURL: "https://desastre-8a-default-rtdb.europe-west1.firebasedatabase.app/"
     };
@@ -19,10 +20,12 @@
     const app = initializeApp(firebaseConfig);
     const db  = getDatabase(app);
 
-    // ── CONFIGURACIÓN ────────────────────────────────────────────
     const SECRET_CODE = '7184';
+    const ADMIN_NAME  = 'Javi Sanjuán';
 
+    // Lista alfabética con Adrián y Jimena añadidos
     const PARTICIPANTS = [
+      'Adrián',
       'Arturo',
       'Asier',
       'Carmen',
@@ -33,6 +36,7 @@
       'Hugo',
       'Javi Pérez',
       'Javi Sanjuán',
+      'Jimena',
       'Jorge',
       'Lucas',
       'Marco',
@@ -48,18 +52,31 @@
       'Tom',
       'Xavi',
     ];
+    // 26 participantes → 8 filas de 3 + 1 fila de 2 → centrado con CSS
 
-    // ── ESTADO LOCAL ─────────────────────────────────────────────
     let claimed = {};
     let selectedParticipant = null;
     let adminVisible = false;
 
-    // ── ESCUCHAR CAMBIOS EN FIREBASE EN TIEMPO REAL ──────────────
+    // ── FIREBASE LISTENERS ───────────────────────────────────────
     const claimedRef = ref(db, 'claimed');
     onValue(claimedRef, (snapshot) => {
       claimed = snapshot.val() || {};
       renderParticipants();
+      document.getElementById('loading').classList.add('hidden');
     });
+
+    const logRef = ref(db, 'log');
+    onValue(logRef, (snapshot) => {
+      const data = snapshot.val();
+      const entries = data ? Object.values(data).reverse() : [];
+      renderLog(entries);
+    });
+
+    // ── SANITIZE KEY ─────────────────────────────────────────────
+    function sanitizeKey(name) {
+      return name.replace(/[.#$\/\[\] ]/g, '_');
+    }
 
     // ── RENDER PARTICIPANTES ─────────────────────────────────────
     function renderParticipants() {
@@ -76,11 +93,6 @@
         btn.onclick = () => selectParticipant(name);
         list.appendChild(btn);
       });
-    }
-
-    // Firebase no admite puntos, #, $, /, [ ] en claves
-    function sanitizeKey(name) {
-      return name.replace(/[.#$\/\[\] ]/g, '_');
     }
 
     // ── SELECCIÓN ────────────────────────────────────────────────
@@ -129,17 +141,19 @@
       document.getElementById('screen-select').style.display = '';
     };
 
+    window.goBackFromSuccess = function() {
+      document.getElementById('screen-success').classList.remove('visible');
+      document.getElementById('admin-panel').classList.remove('visible');
+      adminVisible = false;
+      document.getElementById('screen-select').style.display = '';
+      selectedParticipant = null;
+    };
+
     // ── ACCESO CONCEDIDO ─────────────────────────────────────────
     async function grantAccess(name, method) {
-      const key = sanitizeKey(name);
-      const now = new Date();
-      const time = now.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-
-      // Escribir en Firebase
-      await update(ref(db, 'claimed'), { [key]: true });
+      await update(ref(db, 'claimed'), { [sanitizeKey(name)]: true });
       writeLog(name, method);
 
-      // Mostrar pantalla de bienvenida
       document.getElementById('screen-select').style.display = 'none';
       document.getElementById('screen-code').classList.remove('visible');
       document.getElementById('success-name').textContent = name;
@@ -148,6 +162,12 @@
       document.getElementById('success-mission').textContent =
         'Investiga. Desconfía. Sé el último en pie.';
       document.getElementById('screen-success').classList.add('visible');
+
+      // Si es Javi Sanjuán, mostrar panel admin automáticamente
+      if (name === ADMIN_NAME) {
+        adminVisible = true;
+        document.getElementById('admin-panel').classList.add('visible');
+      }
     }
 
     // ── LOG ──────────────────────────────────────────────────────
@@ -157,19 +177,10 @@
       push(ref(db, 'log'), { name, method, time });
     }
 
-    // Escuchar log en tiempo real
-    const logRef = ref(db, 'log');
-    onValue(logRef, (snapshot) => {
-      const data = snapshot.val();
-      if (!data) return;
-      const entries = Object.values(data).reverse();
-      renderLog(entries);
-    });
-
     function renderLog(entries) {
       const container = document.getElementById('log-list');
       if (!container) return;
-      if (!entries || !entries.length) {
+      if (!entries.length) {
         container.innerHTML = '<p style="font-size:12px;opacity:0.4;text-align:center;font-style:italic;">Sin accesos registrados</p>';
         return;
       }
@@ -190,7 +201,6 @@
       else panel.classList.remove('visible');
     };
 
-    // ── RESET (solo para admin) ──────────────────────────────────
     window.resetGame = function() {
       if (confirm('¿Resetear todos los accesos? Esto borrará todos los datos.')) {
         update(ref(db, '/'), { claimed: null, log: null });
@@ -203,7 +213,6 @@
       --gold: #c9a84c;
       --gold-light: #e8cc80;
       --crimson: #8b1a1a;
-      --dark: #0d0b08;
       --darker: #080604;
       --parchment: #f5e6c8;
       --parchment-dark: #d4b896;
@@ -243,8 +252,7 @@
       top: -200px;
       left: 50%;
       transform: translateX(-50%);
-      width: 600px;
-      height: 600px;
+      width: 600px; height: 600px;
       background: radial-gradient(ellipse, rgba(201,168,76,0.12) 0%, transparent 70%);
       animation: flicker 3s ease-in-out infinite alternate;
       pointer-events: none;
@@ -303,7 +311,6 @@
       font-size: 10px;
       color: var(--gold);
       text-transform: uppercase;
-      font-family: 'Crimson Text', serif;
       margin-bottom: 6px;
       opacity: 0.7;
     }
@@ -365,11 +372,26 @@
       margin-bottom: 12px;
     }
 
+    /* Grid 3 columnas, última fila centrada */
     .participants-grid {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
       gap: 7px;
       margin-bottom: 28px;
+      justify-items: stretch;
+    }
+
+    /* Centrar última fila si tiene menos de 3 */
+    .participants-grid::after {
+      content: '';
+    }
+
+    /* Si quedan 2 en última fila: el primero de la última fila empieza en col 1 centrado */
+    .participant-btn:last-child:nth-child(3n - 1) {
+      grid-column: 2 / 3;
+    }
+    .participant-btn:last-child:nth-child(3n - 2) {
+      grid-column: 2 / 3;
     }
 
     .participant-btn {
@@ -402,12 +424,11 @@
     .participant-btn.taken {
       opacity: 0.3;
       color: var(--parchment-dark);
-      cursor: pointer;
     }
 
     .lock-icon { font-size: 10px; display: block; }
 
-    /* Loading state */
+    /* Loading */
     .loading-overlay {
       position: fixed;
       inset: 0;
@@ -418,10 +439,7 @@
       z-index: 999;
       transition: opacity 0.5s ease;
     }
-    .loading-overlay.hidden {
-      opacity: 0;
-      pointer-events: none;
-    }
+    .loading-overlay.hidden { opacity: 0; pointer-events: none; }
     .loading-dot {
       width: 8px; height: 8px;
       background: var(--gold);
@@ -472,14 +490,8 @@
       outline: none;
       transition: border-color 0.2s;
     }
-    .code-input:focus {
-      border-color: rgba(201,168,76,0.8);
-      box-shadow: 0 0 20px rgba(201,168,76,0.1);
-    }
-    .code-input.error {
-      border-color: var(--crimson);
-      animation: shake 0.4s ease;
-    }
+    .code-input:focus { border-color: rgba(201,168,76,0.8); box-shadow: 0 0 20px rgba(201,168,76,0.1); }
+    .code-input.error { border-color: var(--crimson); animation: shake 0.4s ease; }
     @keyframes shake {
       0%,100% { transform: translateX(0); }
       20%,60%  { transform: translateX(-6px); }
@@ -500,10 +512,7 @@
       transition: all 0.2s;
       white-space: nowrap;
     }
-    .btn-confirm:hover {
-      background: var(--gold-light);
-      box-shadow: 0 0 20px rgba(201,168,76,0.3);
-    }
+    .btn-confirm:hover { background: var(--gold-light); box-shadow: 0 0 20px rgba(201,168,76,0.3); }
 
     .btn-back {
       background: none;
@@ -517,10 +526,7 @@
       padding: 8px;
       transition: all 0.2s;
     }
-    .btn-back:hover {
-      border-color: rgba(201,168,76,0.5);
-      color: var(--parchment);
-    }
+    .btn-back:hover { border-color: rgba(201,168,76,0.5); color: var(--parchment); }
 
     .error-msg {
       color: var(--crimson);
@@ -541,6 +547,24 @@
       text-align: center;
     }
     .success-screen.visible { display: flex; }
+
+    .btn-back-home {
+      align-self: flex-start;
+      background: none;
+      border: none;
+      color: var(--gold);
+      opacity: 0.5;
+      font-family: 'Crimson Text', serif;
+      font-size: 14px;
+      letter-spacing: 0.15em;
+      cursor: pointer;
+      padding: 0;
+      transition: opacity 0.2s;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .btn-back-home:hover { opacity: 1; }
 
     .success-icon {
       font-size: 48px;
@@ -597,6 +621,7 @@
       border-top: 1px solid rgba(201,168,76,0.1);
       padding-top: 20px;
       display: none;
+      width: 100%;
     }
     .admin-panel.visible { display: block; }
     .admin-title {
@@ -636,32 +661,9 @@
       cursor: pointer;
       transition: all 0.2s;
     }
-    .btn-reset:hover {
-      border-color: var(--crimson);
-      color: var(--crimson);
-    }
+    .btn-reset:hover { border-color: var(--crimson); color: var(--crimson); }
 
-    .admin-toggle {
-      position: fixed;
-      bottom: 16px;
-      right: 16px;
-      background: rgba(0,0,0,0.6);
-      border: 1px solid rgba(201,168,76,0.2);
-      color: rgba(201,168,76,0.4);
-      font-size: 10px;
-      letter-spacing: 0.2em;
-      padding: 6px 10px;
-      cursor: pointer;
-      text-transform: uppercase;
-      z-index: 100;
-      transition: all 0.2s;
-    }
-    .admin-toggle:hover {
-      color: var(--gold);
-      border-color: rgba(201,168,76,0.5);
-    }
-
-    /* Sync indicator */
+    /* Sync dot */
     .sync-dot {
       position: fixed;
       top: 14px;
@@ -673,90 +675,81 @@
       z-index: 100;
       animation: syncPulse 2s ease infinite;
     }
-    .sync-dot.offline { background: var(--crimson); box-shadow: 0 0 6px var(--crimson); }
     @keyframes syncPulse {
       0%,100% { opacity: 1; }
       50%      { opacity: 0.4; }
     }
   </style>
+
 </head>
 <body>
 
-<!-- Loading -->
 <div class="loading-overlay" id="loading">
   <div class="loading-dot"></div>
   <div class="loading-dot"></div>
   <div class="loading-dot"></div>
 </div>
 
-<!-- Sync indicator -->
-<div class="sync-dot" id="sync-dot" title="Sincronizado con Firebase"></div>
+<div class="sync-dot" title="Sincronizado"></div>
 
 <div class="container">
   <div class="card">
-    <p class="eyebrow">Finca · 2025</p>
+    <p class="eyebrow">2026</p>
     <h1 class="title">Desastre del 8A</h1>
     <p class="subtitle">El cumpleaños de Tom</p>
 
-    <div class="divider">
-      <div class="divider-line"></div>
-      <span class="divider-icon">🔍</span>
-      <div class="divider-line"></div>
-    </div>
-
-    <!-- PANTALLA 1: Selección -->
-    <div id="screen-select">
-      <p class="intro">
-        Ha habido una amenaza de que en esta finca algo terrible va a pasar hoy,
-        los invitados han recibido unas directrices.<br><br>
-        <strong>"Ser el último en pie."</strong>
-      </p>
-      <p class="list-label">¿Quién eres tú?</p>
-      <div class="participants-grid" id="participants-list"></div>
-    </div>
-
-    <!-- PANTALLA 2: Código -->
-    <div class="code-panel" id="screen-code">
-      <p class="code-message" id="code-message"></p>
-      <div class="code-input-wrap">
-        <input type="password" class="code-input" id="code-input" maxlength="4" placeholder="····" inputmode="numeric" />
-        <button class="btn-confirm" onclick="checkCode()">Entrar</button>
-      </div>
-      <p class="error-msg" id="error-msg">Código incorrecto. Intento registrado.</p>
-      <button class="btn-back" onclick="goBack()">← Volver</button>
-    </div>
-
-    <!-- PANTALLA 3: Bienvenida -->
-    <div class="success-screen" id="screen-success">
-      <div class="success-icon">🔍</div>
-      <p class="success-role">Participante identificado</p>
-      <p class="success-name" id="success-name"></p>
-      <p class="success-text" id="success-text"></p>
-      <div class="secret-card">
-        <p class="secret-card-label">Tu misión esta noche</p>
-        <p class="secret-content" id="success-mission"></p>
-      </div>
-    </div>
-
-    <!-- ADMIN LOG -->
-    <div class="admin-panel" id="admin-panel">
-      <p class="admin-title">✦ Registro de accesos ✦</p>
-      <div id="log-list"></div>
-      <button class="btn-reset" onclick="resetGame()">⚠ Resetear todos los accesos</button>
-    </div>
-  </div>
+```
+<div class="divider">
+  <div class="divider-line"></div>
+  <span class="divider-icon">🔍</span>
+  <div class="divider-line"></div>
 </div>
 
-<button class="admin-toggle" onclick="toggleAdmin()">Admin</button>
+<!-- PANTALLA 1: Selección -->
+<div id="screen-select">
+  <p class="intro">
+    Ha habido una amenaza de que en esta finca algo terrible va a pasar hoy,
+    los invitados han recibido unas directrices.<br><br>
+    <strong>"Ser el último en pie."</strong>
+  </p>
+  <p class="list-label">¿Quién eres tú?</p>
+  <div class="participants-grid" id="participants-list"></div>
+</div>
 
-<script>
-  // Quitar loading cuando Firebase responde por primera vez
-  window.addEventListener('load', () => {
-    setTimeout(() => {
-      document.getElementById('loading').classList.add('hidden');
-    }, 1200);
-  });
-</script>
+<!-- PANTALLA 2: Código -->
+<div class="code-panel" id="screen-code">
+  <p class="code-message" id="code-message"></p>
+  <div class="code-input-wrap">
+    <input type="password" class="code-input" id="code-input" maxlength="4" placeholder="····" inputmode="numeric" />
+    <button class="btn-confirm" onclick="checkCode()">Entrar</button>
+  </div>
+  <p class="error-msg" id="error-msg">Código incorrecto. Intento registrado.</p>
+  <button class="btn-back" onclick="goBack()">← Volver</button>
+</div>
+
+<!-- PANTALLA 3: Bienvenida -->
+<div class="success-screen" id="screen-success">
+  <button class="btn-back-home" onclick="goBackFromSuccess()">← Volver al inicio</button>
+  <div class="success-icon">🔍</div>
+  <p class="success-role">Participante identificado</p>
+  <p class="success-name" id="success-name"></p>
+  <p class="success-text" id="success-text"></p>
+  <div class="secret-card">
+    <p class="secret-card-label">Tu misión esta noche</p>
+    <p class="secret-content" id="success-mission"></p>
+  </div>
+
+  <!-- ADMIN PANEL — solo visible para Javi Sanjuán -->
+  <div class="admin-panel" id="admin-panel">
+    <p class="admin-title">✦ Registro de accesos ✦</p>
+    <div id="log-list"></div>
+    <button class="btn-reset" onclick="resetGame()">⚠ Resetear todos los accesos</button>
+  </div>
+</div>
+```
+
+  </div>
+</div>
 
 </body>
 </html>
