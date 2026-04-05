@@ -1,0 +1,762 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Desastre del 8A</title>
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;0,900;1,400&family=Crimson+Text:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet" />
+
+  <!-- Firebase SDK -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import { getDatabase, ref, onValue, update, push } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+
+    // ── FIREBASE CONFIG ──────────────────────────────────────────
+    const firebaseConfig = {
+      databaseURL: "https://desastre-8a-default-rtdb.europe-west1.firebasedatabase.app/"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db  = getDatabase(app);
+
+    // ── CONFIGURACIÓN ────────────────────────────────────────────
+    const SECRET_CODE = '7184';
+
+    const PARTICIPANTS = [
+      'Arturo',
+      'Asier',
+      'Carmen',
+      'Carles',
+      'Caye',
+      'Emma',
+      'Guille',
+      'Hugo',
+      'Javi Pérez',
+      'Javi Sanjuán',
+      'Jorge',
+      'Lucas',
+      'Marco',
+      'Marcos',
+      'Maria',
+      'Naiara',
+      'Nico',
+      'Sergi',
+      'Sergio',
+      'Sergio Blanca',
+      'Sofia',
+      'Tati',
+      'Tom',
+      'Xavi',
+    ];
+
+    // ── ESTADO LOCAL ─────────────────────────────────────────────
+    let claimed = {};
+    let selectedParticipant = null;
+    let adminVisible = false;
+
+    // ── ESCUCHAR CAMBIOS EN FIREBASE EN TIEMPO REAL ──────────────
+    const claimedRef = ref(db, 'claimed');
+    onValue(claimedRef, (snapshot) => {
+      claimed = snapshot.val() || {};
+      renderParticipants();
+    });
+
+    // ── RENDER PARTICIPANTES ─────────────────────────────────────
+    function renderParticipants() {
+      const list = document.getElementById('participants-list');
+      if (!list) return;
+      list.innerHTML = '';
+      PARTICIPANTS.forEach(name => {
+        const taken = !!claimed[sanitizeKey(name)];
+        const btn = document.createElement('button');
+        btn.className = 'participant-btn' + (taken ? ' taken' : '');
+        btn.innerHTML = taken
+          ? `<span>${name}</span><span class="lock-icon">🔒</span>`
+          : `<span>${name}</span>`;
+        btn.onclick = () => selectParticipant(name);
+        list.appendChild(btn);
+      });
+    }
+
+    // Firebase no admite puntos, #, $, /, [ ] en claves
+    function sanitizeKey(name) {
+      return name.replace(/[.#$\/\[\] ]/g, '_');
+    }
+
+    // ── SELECCIÓN ────────────────────────────────────────────────
+    function selectParticipant(name) {
+      selectedParticipant = name;
+      const key = sanitizeKey(name);
+      if (claimed[key]) {
+        document.getElementById('screen-select').style.display = 'none';
+        document.getElementById('code-message').innerHTML =
+          `<strong style="color:var(--gold)">${name}</strong> ya está identificado.<br>Introduce el código secreto para acceder.`;
+        document.getElementById('screen-code').classList.add('visible');
+        setTimeout(() => document.getElementById('code-input').focus(), 100);
+      } else {
+        grantAccess(name, 'Primer acceso');
+      }
+    }
+
+    // ── CÓDIGO ───────────────────────────────────────────────────
+    window.checkCode = function() {
+      const val   = document.getElementById('code-input').value;
+      const input = document.getElementById('code-input');
+      const err   = document.getElementById('error-msg');
+      if (val === SECRET_CODE) {
+        err.classList.remove('visible');
+        grantAccess(selectedParticipant, 'Código verificado');
+      } else {
+        input.classList.add('error');
+        err.classList.add('visible');
+        writeLog(selectedParticipant + ' (intento fallido)', 'Código incorrecto');
+        setTimeout(() => input.classList.remove('error'), 600);
+        input.value = '';
+      }
+    };
+
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && document.getElementById('screen-code').classList.contains('visible')) {
+        window.checkCode();
+      }
+    });
+
+    window.goBack = function() {
+      selectedParticipant = null;
+      document.getElementById('screen-code').classList.remove('visible');
+      document.getElementById('error-msg').classList.remove('visible');
+      document.getElementById('code-input').value = '';
+      document.getElementById('screen-select').style.display = '';
+    };
+
+    // ── ACCESO CONCEDIDO ─────────────────────────────────────────
+    async function grantAccess(name, method) {
+      const key = sanitizeKey(name);
+      const now = new Date();
+      const time = now.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+      // Escribir en Firebase
+      await update(ref(db, 'claimed'), { [key]: true });
+      writeLog(name, method);
+
+      // Mostrar pantalla de bienvenida
+      document.getElementById('screen-select').style.display = 'none';
+      document.getElementById('screen-code').classList.remove('visible');
+      document.getElementById('success-name').textContent = name;
+      document.getElementById('success-text').textContent =
+        `Bienvenido/a a la finca, ${name}. La noche acaba de empezar.`;
+      document.getElementById('success-mission').textContent =
+        'Investiga. Desconfía. Sé el último en pie.';
+      document.getElementById('screen-success').classList.add('visible');
+    }
+
+    // ── LOG ──────────────────────────────────────────────────────
+    function writeLog(name, method) {
+      const now = new Date();
+      const time = now.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      push(ref(db, 'log'), { name, method, time });
+    }
+
+    // Escuchar log en tiempo real
+    const logRef = ref(db, 'log');
+    onValue(logRef, (snapshot) => {
+      const data = snapshot.val();
+      if (!data) return;
+      const entries = Object.values(data).reverse();
+      renderLog(entries);
+    });
+
+    function renderLog(entries) {
+      const container = document.getElementById('log-list');
+      if (!container) return;
+      if (!entries || !entries.length) {
+        container.innerHTML = '<p style="font-size:12px;opacity:0.4;text-align:center;font-style:italic;">Sin accesos registrados</p>';
+        return;
+      }
+      container.innerHTML = entries.map(e =>
+        `<div class="log-entry">
+          <span class="log-name">${e.name}</span>
+          <span class="log-method">${e.method}</span>
+          <span class="log-time">${e.time}</span>
+        </div>`
+      ).join('');
+    }
+
+    // ── ADMIN ────────────────────────────────────────────────────
+    window.toggleAdmin = function() {
+      adminVisible = !adminVisible;
+      const panel = document.getElementById('admin-panel');
+      if (adminVisible) panel.classList.add('visible');
+      else panel.classList.remove('visible');
+    };
+
+    // ── RESET (solo para admin) ──────────────────────────────────
+    window.resetGame = function() {
+      if (confirm('¿Resetear todos los accesos? Esto borrará todos los datos.')) {
+        update(ref(db, '/'), { claimed: null, log: null });
+      }
+    };
+  </script>
+
+  <style>
+    :root {
+      --gold: #c9a84c;
+      --gold-light: #e8cc80;
+      --crimson: #8b1a1a;
+      --dark: #0d0b08;
+      --darker: #080604;
+      --parchment: #f5e6c8;
+      --parchment-dark: #d4b896;
+      --ink: #1a1008;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background-color: var(--darker);
+      font-family: 'Crimson Text', serif;
+      color: var(--parchment);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow-x: hidden;
+      position: relative;
+    }
+
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background:
+        radial-gradient(ellipse at 20% 50%, rgba(139,26,26,0.15) 0%, transparent 60%),
+        radial-gradient(ellipse at 80% 20%, rgba(201,168,76,0.08) 0%, transparent 50%),
+        repeating-linear-gradient(0deg, transparent, transparent 60px, rgba(201,168,76,0.03) 60px, rgba(201,168,76,0.03) 61px),
+        repeating-linear-gradient(90deg, transparent, transparent 60px, rgba(201,168,76,0.03) 60px, rgba(201,168,76,0.03) 61px);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    body::after {
+      content: '';
+      position: fixed;
+      top: -200px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 600px;
+      height: 600px;
+      background: radial-gradient(ellipse, rgba(201,168,76,0.12) 0%, transparent 70%);
+      animation: flicker 3s ease-in-out infinite alternate;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    @keyframes flicker {
+      0%   { opacity: 0.6; transform: translateX(-50%) scale(1); }
+      25%  { opacity: 1;   transform: translateX(-50%) scale(1.05); }
+      50%  { opacity: 0.7; transform: translateX(-50%) scale(0.98); }
+      75%  { opacity: 0.9; transform: translateX(-50%) scale(1.02); }
+      100% { opacity: 0.5; transform: translateX(-50%) scale(1); }
+    }
+
+    .container {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      max-width: 560px;
+      padding: 20px;
+    }
+
+    .card {
+      background: linear-gradient(160deg, #1a1208 0%, #0f0c06 50%, #150e07 100%);
+      border: 1px solid rgba(201,168,76,0.3);
+      border-radius: 2px;
+      padding: 44px 36px;
+      box-shadow:
+        0 0 60px rgba(0,0,0,0.9),
+        0 0 120px rgba(0,0,0,0.6),
+        inset 0 1px 0 rgba(201,168,76,0.15),
+        inset 0 -1px 0 rgba(201,168,76,0.05);
+      position: relative;
+      animation: cardReveal 1s ease forwards;
+      opacity: 0;
+      transform: translateY(20px);
+    }
+
+    @keyframes cardReveal {
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .card::before, .card::after {
+      content: '✦';
+      position: absolute;
+      color: var(--gold);
+      opacity: 0.4;
+      font-size: 12px;
+    }
+    .card::before { top: 14px; left: 18px; }
+    .card::after  { bottom: 14px; right: 18px; }
+
+    .eyebrow {
+      text-align: center;
+      letter-spacing: 0.35em;
+      font-size: 10px;
+      color: var(--gold);
+      text-transform: uppercase;
+      font-family: 'Crimson Text', serif;
+      margin-bottom: 6px;
+      opacity: 0.7;
+    }
+
+    .title {
+      font-family: 'Playfair Display', serif;
+      font-size: 36px;
+      font-weight: 900;
+      text-align: center;
+      color: var(--gold);
+      line-height: 1.1;
+      text-shadow: 0 0 40px rgba(201,168,76,0.4);
+      letter-spacing: -0.01em;
+    }
+
+    .subtitle {
+      font-family: 'Playfair Display', serif;
+      font-style: italic;
+      font-size: 15px;
+      text-align: center;
+      color: var(--parchment-dark);
+      margin-top: 6px;
+      letter-spacing: 0.05em;
+    }
+
+    .divider {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin: 22px 0;
+    }
+    .divider-line {
+      flex: 1;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(201,168,76,0.4), transparent);
+    }
+    .divider-icon { font-size: 16px; }
+
+    .intro {
+      font-size: 15px;
+      line-height: 1.75;
+      color: var(--parchment-dark);
+      text-align: center;
+      font-style: italic;
+      margin-bottom: 28px;
+    }
+    .intro strong {
+      color: var(--parchment);
+      font-style: normal;
+      letter-spacing: 0.05em;
+    }
+
+    .list-label {
+      font-size: 11px;
+      letter-spacing: 0.25em;
+      text-transform: uppercase;
+      color: var(--gold);
+      opacity: 0.6;
+      margin-bottom: 12px;
+    }
+
+    .participants-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 7px;
+      margin-bottom: 28px;
+    }
+
+    .participant-btn {
+      padding: 11px 8px;
+      background: rgba(201,168,76,0.05);
+      border: 1px solid rgba(201,168,76,0.18);
+      color: var(--parchment);
+      font-family: 'Crimson Text', serif;
+      font-size: 15px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      min-height: 52px;
+      line-height: 1.2;
+    }
+
+    .participant-btn:hover:not(.taken) {
+      background: rgba(201,168,76,0.12);
+      border-color: rgba(201,168,76,0.6);
+      color: var(--gold-light);
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    }
+
+    .participant-btn.taken {
+      opacity: 0.3;
+      color: var(--parchment-dark);
+      cursor: pointer;
+    }
+
+    .lock-icon { font-size: 10px; display: block; }
+
+    /* Loading state */
+    .loading-overlay {
+      position: fixed;
+      inset: 0;
+      background: var(--darker);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 999;
+      transition: opacity 0.5s ease;
+    }
+    .loading-overlay.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+    .loading-dot {
+      width: 8px; height: 8px;
+      background: var(--gold);
+      border-radius: 50%;
+      animation: dotPulse 1.2s ease infinite;
+      margin: 0 4px;
+    }
+    .loading-dot:nth-child(2) { animation-delay: 0.2s; }
+    .loading-dot:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes dotPulse {
+      0%,100% { opacity: 0.2; transform: scale(0.8); }
+      50%      { opacity: 1;   transform: scale(1.2); }
+    }
+
+    /* Code panel */
+    .code-panel {
+      display: none;
+      flex-direction: column;
+      gap: 16px;
+      animation: fadeIn 0.4s ease;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .code-panel.visible { display: flex; }
+
+    .code-message {
+      font-size: 14px;
+      line-height: 1.7;
+      color: var(--parchment-dark);
+      text-align: center;
+      font-style: italic;
+    }
+
+    .code-input-wrap { display: flex; gap: 10px; }
+
+    .code-input {
+      flex: 1;
+      background: rgba(0,0,0,0.5);
+      border: 1px solid rgba(201,168,76,0.3);
+      color: var(--gold-light);
+      font-family: 'Playfair Display', serif;
+      font-size: 22px;
+      letter-spacing: 0.4em;
+      text-align: center;
+      padding: 12px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .code-input:focus {
+      border-color: rgba(201,168,76,0.8);
+      box-shadow: 0 0 20px rgba(201,168,76,0.1);
+    }
+    .code-input.error {
+      border-color: var(--crimson);
+      animation: shake 0.4s ease;
+    }
+    @keyframes shake {
+      0%,100% { transform: translateX(0); }
+      20%,60%  { transform: translateX(-6px); }
+      40%,80%  { transform: translateX(6px); }
+    }
+
+    .btn-confirm {
+      padding: 12px 20px;
+      background: var(--gold);
+      color: var(--ink);
+      border: none;
+      font-family: 'Playfair Display', serif;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      cursor: pointer;
+      text-transform: uppercase;
+      transition: all 0.2s;
+      white-space: nowrap;
+    }
+    .btn-confirm:hover {
+      background: var(--gold-light);
+      box-shadow: 0 0 20px rgba(201,168,76,0.3);
+    }
+
+    .btn-back {
+      background: none;
+      border: 1px solid rgba(201,168,76,0.2);
+      color: var(--parchment-dark);
+      font-family: 'Crimson Text', serif;
+      font-size: 13px;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      cursor: pointer;
+      padding: 8px;
+      transition: all 0.2s;
+    }
+    .btn-back:hover {
+      border-color: rgba(201,168,76,0.5);
+      color: var(--parchment);
+    }
+
+    .error-msg {
+      color: var(--crimson);
+      font-size: 13px;
+      text-align: center;
+      display: none;
+      font-style: italic;
+    }
+    .error-msg.visible { display: block; }
+
+    /* Success screen */
+    .success-screen {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      gap: 20px;
+      animation: fadeIn 0.6s ease;
+      text-align: center;
+    }
+    .success-screen.visible { display: flex; }
+
+    .success-icon {
+      font-size: 48px;
+      animation: pulse 2s ease infinite;
+    }
+    @keyframes pulse {
+      0%,100% { transform: scale(1); opacity: 1; }
+      50%      { transform: scale(1.1); opacity: 0.8; }
+    }
+    .success-name {
+      font-family: 'Playfair Display', serif;
+      font-size: 28px;
+      color: var(--gold);
+      font-weight: 700;
+    }
+    .success-role {
+      font-size: 13px;
+      letter-spacing: 0.3em;
+      text-transform: uppercase;
+      color: var(--gold);
+      opacity: 0.6;
+    }
+    .success-text {
+      font-style: italic;
+      color: var(--parchment-dark);
+      font-size: 16px;
+      line-height: 1.7;
+      max-width: 340px;
+    }
+    .secret-card {
+      width: 100%;
+      border: 1px solid rgba(201,168,76,0.3);
+      padding: 24px;
+      background: rgba(201,168,76,0.04);
+    }
+    .secret-card-label {
+      font-size: 10px;
+      letter-spacing: 0.3em;
+      text-transform: uppercase;
+      color: var(--gold);
+      opacity: 0.5;
+      margin-bottom: 10px;
+    }
+    .secret-content {
+      font-family: 'Playfair Display', serif;
+      font-size: 17px;
+      color: var(--parchment);
+      line-height: 1.6;
+    }
+
+    /* Admin panel */
+    .admin-panel {
+      margin-top: 40px;
+      border-top: 1px solid rgba(201,168,76,0.1);
+      padding-top: 20px;
+      display: none;
+    }
+    .admin-panel.visible { display: block; }
+    .admin-title {
+      font-size: 10px;
+      letter-spacing: 0.3em;
+      text-transform: uppercase;
+      color: var(--gold);
+      opacity: 0.4;
+      margin-bottom: 12px;
+      text-align: center;
+    }
+    .log-entry {
+      font-size: 12px;
+      color: var(--parchment-dark);
+      opacity: 0.6;
+      padding: 4px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .log-time   { opacity: 0.5; white-space: nowrap; font-size: 11px; }
+    .log-name   { font-style: italic; }
+    .log-method { color: var(--gold); opacity: 0.6; }
+
+    .btn-reset {
+      margin-top: 16px;
+      width: 100%;
+      background: none;
+      border: 1px solid rgba(139,26,26,0.4);
+      color: rgba(139,26,26,0.6);
+      font-family: 'Crimson Text', serif;
+      font-size: 12px;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      padding: 8px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-reset:hover {
+      border-color: var(--crimson);
+      color: var(--crimson);
+    }
+
+    .admin-toggle {
+      position: fixed;
+      bottom: 16px;
+      right: 16px;
+      background: rgba(0,0,0,0.6);
+      border: 1px solid rgba(201,168,76,0.2);
+      color: rgba(201,168,76,0.4);
+      font-size: 10px;
+      letter-spacing: 0.2em;
+      padding: 6px 10px;
+      cursor: pointer;
+      text-transform: uppercase;
+      z-index: 100;
+      transition: all 0.2s;
+    }
+    .admin-toggle:hover {
+      color: var(--gold);
+      border-color: rgba(201,168,76,0.5);
+    }
+
+    /* Sync indicator */
+    .sync-dot {
+      position: fixed;
+      top: 14px;
+      right: 14px;
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: #2ecc71;
+      box-shadow: 0 0 6px #2ecc71;
+      z-index: 100;
+      animation: syncPulse 2s ease infinite;
+    }
+    .sync-dot.offline { background: var(--crimson); box-shadow: 0 0 6px var(--crimson); }
+    @keyframes syncPulse {
+      0%,100% { opacity: 1; }
+      50%      { opacity: 0.4; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- Loading -->
+<div class="loading-overlay" id="loading">
+  <div class="loading-dot"></div>
+  <div class="loading-dot"></div>
+  <div class="loading-dot"></div>
+</div>
+
+<!-- Sync indicator -->
+<div class="sync-dot" id="sync-dot" title="Sincronizado con Firebase"></div>
+
+<div class="container">
+  <div class="card">
+    <p class="eyebrow">Finca · 2025</p>
+    <h1 class="title">Desastre del 8A</h1>
+    <p class="subtitle">El cumpleaños de Tom</p>
+
+    <div class="divider">
+      <div class="divider-line"></div>
+      <span class="divider-icon">🔍</span>
+      <div class="divider-line"></div>
+    </div>
+
+    <!-- PANTALLA 1: Selección -->
+    <div id="screen-select">
+      <p class="intro">
+        Ha habido una amenaza de que en esta finca algo terrible va a pasar hoy,
+        los invitados han recibido unas directrices.<br><br>
+        <strong>"Ser el último en pie."</strong>
+      </p>
+      <p class="list-label">¿Quién eres tú?</p>
+      <div class="participants-grid" id="participants-list"></div>
+    </div>
+
+    <!-- PANTALLA 2: Código -->
+    <div class="code-panel" id="screen-code">
+      <p class="code-message" id="code-message"></p>
+      <div class="code-input-wrap">
+        <input type="password" class="code-input" id="code-input" maxlength="4" placeholder="····" inputmode="numeric" />
+        <button class="btn-confirm" onclick="checkCode()">Entrar</button>
+      </div>
+      <p class="error-msg" id="error-msg">Código incorrecto. Intento registrado.</p>
+      <button class="btn-back" onclick="goBack()">← Volver</button>
+    </div>
+
+    <!-- PANTALLA 3: Bienvenida -->
+    <div class="success-screen" id="screen-success">
+      <div class="success-icon">🔍</div>
+      <p class="success-role">Participante identificado</p>
+      <p class="success-name" id="success-name"></p>
+      <p class="success-text" id="success-text"></p>
+      <div class="secret-card">
+        <p class="secret-card-label">Tu misión esta noche</p>
+        <p class="secret-content" id="success-mission"></p>
+      </div>
+    </div>
+
+    <!-- ADMIN LOG -->
+    <div class="admin-panel" id="admin-panel">
+      <p class="admin-title">✦ Registro de accesos ✦</p>
+      <div id="log-list"></div>
+      <button class="btn-reset" onclick="resetGame()">⚠ Resetear todos los accesos</button>
+    </div>
+  </div>
+</div>
+
+<button class="admin-toggle" onclick="toggleAdmin()">Admin</button>
+
+<script>
+  // Quitar loading cuando Firebase responde por primera vez
+  window.addEventListener('load', () => {
+    setTimeout(() => {
+      document.getElementById('loading').classList.add('hidden');
+    }, 1200);
+  });
+</script>
+
+</body>
+</html>
