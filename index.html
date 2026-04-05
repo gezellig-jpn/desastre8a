@@ -1,5 +1,4 @@
 <!DOCTYPE html>
-
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
@@ -14,13 +13,11 @@
     const firebaseConfig = {
       databaseURL: "https://desastre-8a-default-rtdb.europe-west1.firebasedatabase.app/"
     };
-
     const app = initializeApp(firebaseConfig);
     const db  = getDatabase(app);
 
     const ADMIN_NAME = 'Javi Sanjuán';
 
-    // Códigos personales — también usados para entrar al perfil por segunda vez
     const PLAYER_CODES = {
       'Adrián':       '1111',
       'Arturo':       '6767',
@@ -52,50 +49,28 @@
 
     const PARTICIPANTS = Object.keys(PLAYER_CODES);
 
-    const OBJETOS = [
-      'Tenedor','Botella','Papel de baño','Plato','Vaso',
-      'Piedra','Boli','Foto de Tom de pequeño','Tu propia zapatilla','Silla'
-    ];
-    const LUGARES = [
-      'Detrás de la barra','Sala principal','Baño','Debajo de la carpa',
-      'Barbacoa','Escaleras','Terraza arriba','Fuera (dentro de la valla)','Parking','Porche'
-    ];
+    const OBJETOS = ['Tenedor','Botella','Papel de baño','Plato','Vaso','Piedra','Boli','Foto de Tom de pequeño','Tu propia zapatilla','Silla'];
+    const LUGARES = ['Detrás de la barra','Sala principal','Baño','Debajo de la carpa','Barbacoa','Escaleras','Terraza arriba','Fuera (dentro de la valla)','Parking','Porche'];
 
     // ── ESTADO ───────────────────────────────────────────────────
-    let claimed      = {};
-    let missions     = {};
-    let eliminated   = {};
-    let currentPlayer = null;
-    let adminVisible  = false;
-    let confirmingDeath = false;
+    let claimed    = {};
+    let missions   = {};
+    let eliminated = {};
+    let currentPlayer   = null;
+    let adminVisible    = false;
+    let showingDeath    = false;
+    let showingDetective = false;
 
-    function sanitizeKey(name) {
-      return name.replace(/[.#$\/\[\] ]/g, '_');
-    }
-    function keyToName(key) {
-      return PARTICIPANTS.find(n => sanitizeKey(n) === key) || key;
-    }
+    function sanitizeKey(n) { return n.replace(/[.#$\/\[\] ]/g, '_'); }
 
-    // ── FIREBASE LISTENERS ───────────────────────────────────────
-    onValue(ref(db, 'claimed'), snap => {
-      claimed = snap.val() || {};
-      renderParticipants();
-      document.getElementById('loading').classList.add('hidden');
-    });
-    onValue(ref(db, 'missions'), snap => {
-      missions = snap.val() || {};
-      if (currentPlayer) renderMission(currentPlayer);
-    });
-    onValue(ref(db, 'eliminated'), snap => {
-      eliminated = snap.val() || {};
-      if (currentPlayer) renderMission(currentPlayer);
-    });
-    onValue(ref(db, 'log'), snap => {
-      const data = snap.val();
-      renderLog(data ? Object.values(data).reverse() : []);
-    });
+    // ── FIREBASE ─────────────────────────────────────────────────
+    onValue(ref(db,'claimed'),   s => { claimed    = s.val()||{}; renderParticipants(); document.getElementById('loading').classList.add('hidden'); });
+    onValue(ref(db,'missions'),  s => { missions   = s.val()||{}; if(currentPlayer) renderMission(currentPlayer); });
+    onValue(ref(db,'eliminated'),s => { eliminated = s.val()||{}; renderParticipants(); if(currentPlayer) checkEliminated(); });
+    onValue(ref(db,'log'),       s => { const d=s.val(); renderLog(d?Object.values(d).reverse():[]); });
+    onValue(ref(db,'kills'),     s => { const d=s.val(); renderKills(d?Object.values(d).reverse():[]); });
 
-    // ── RENDER PARTICIPANTES ─────────────────────────────────────
+    // ── PARTICIPANTES ────────────────────────────────────────────
     function renderParticipants() {
       const list = document.getElementById('participants-list');
       if (!list) return;
@@ -104,7 +79,7 @@
         const taken = !!claimed[sanitizeKey(name)];
         const dead  = !!eliminated[sanitizeKey(name)];
         const btn   = document.createElement('button');
-        btn.className = 'participant-btn' + (taken ? ' taken' : '') + (dead ? ' dead' : '');
+        btn.className = 'participant-btn' + (dead ? ' dead' : taken ? ' taken' : '');
         btn.innerHTML = dead
           ? `<span>${name}</span><span class="lock-icon">💀</span>`
           : taken
@@ -121,29 +96,24 @@
       }
     }
 
-    // ── SELECCIÓN ────────────────────────────────────────────────
+    // ── SELECCIÓN — todos piden código siempre ────────────────────
     function selectParticipant(name) {
       currentPlayer = name;
-      if (claimed[sanitizeKey(name)]) {
-        document.getElementById('screen-select').style.display = 'none';
-        document.getElementById('code-message').innerHTML =
-          `<strong style="color:var(--gold)">${name}</strong> ya está identificado.<br>Introduce tu código personal para acceder.`;
-        document.getElementById('screen-code').classList.add('visible');
-        setTimeout(() => document.getElementById('code-input').focus(), 100);
-      } else {
-        grantAccess(name, 'Primer acceso');
-      }
+      document.getElementById('screen-select').style.display = 'none';
+      document.getElementById('code-message').innerHTML =
+        `Hola, <strong style="color:var(--gold)">${name}</strong>.<br>Introduce tu código personal para acceder.`;
+      document.getElementById('screen-code').classList.add('visible');
+      setTimeout(() => document.getElementById('code-input').focus(), 100);
     }
 
-    // ── CÓDIGO DE ACCESO ─────────────────────────────────────────
+    // ── CÓDIGO ───────────────────────────────────────────────────
     window.checkCode = function() {
       const val   = document.getElementById('code-input').value;
       const input = document.getElementById('code-input');
       const err   = document.getElementById('error-msg');
-      const expected = PLAYER_CODES[currentPlayer];
-      if (val === expected) {
+      if (val === PLAYER_CODES[currentPlayer]) {
         err.classList.remove('visible');
-        grantAccess(currentPlayer, 'Código verificado');
+        grantAccess(currentPlayer);
       } else {
         input.classList.add('error');
         err.classList.add('visible');
@@ -154,10 +124,10 @@
     };
 
     document.addEventListener('keydown', e => {
-      if (e.key === 'Enter') {
-        if (document.getElementById('screen-code').classList.contains('visible')) window.checkCode();
-        if (document.getElementById('death-panel').classList.contains('visible')) window.checkDeathCode();
-      }
+      if (e.key !== 'Enter') return;
+      if (document.getElementById('screen-code').classList.contains('visible')) window.checkCode();
+      if (showingDeath)      window.checkDeathCode();
+      if (showingDetective && document.getElementById('detective-code-wrap').style.display !== 'none') window.checkDetectiveCode();
     });
 
     window.goBack = function() {
@@ -172,22 +142,24 @@
       document.getElementById('screen-success').classList.remove('visible');
       document.getElementById('admin-panel').classList.remove('visible');
       adminVisible = false;
+      showingDeath = false;
+      showingDetective = false;
+      document.getElementById('death-panel').classList.remove('visible');
+      document.getElementById('detective-panel').classList.remove('visible');
       document.getElementById('screen-select').style.display = '';
       currentPlayer = null;
-      // Cerrar panel de muerte si estaba abierto
-      document.getElementById('death-panel').classList.remove('visible');
-      confirmingDeath = false;
     };
 
-    // ── ACCESO CONCEDIDO ─────────────────────────────────────────
-    async function grantAccess(name, method) {
-      await update(ref(db, 'claimed'), { [sanitizeKey(name)]: true });
-      writeLog(name, method);
-      document.getElementById('screen-select').style.display = 'none';
+    // ── ACCESO ───────────────────────────────────────────────────
+    async function grantAccess(name) {
+      const isNew = !claimed[sanitizeKey(name)];
+      await update(ref(db,'claimed'), { [sanitizeKey(name)]: true });
+      writeLog(name, isNew ? 'Primer acceso' : 'Reentrada con código');
       document.getElementById('screen-code').classList.remove('visible');
       document.getElementById('code-input').value = '';
       document.getElementById('success-name').textContent = name;
       renderMission(name);
+      checkEliminated();
       document.getElementById('screen-success').classList.add('visible');
       if (name === ADMIN_NAME) {
         adminVisible = true;
@@ -195,7 +167,17 @@
       }
     }
 
-    // ── RENDER MISIÓN ────────────────────────────────────────────
+    // ── ELIMINADO — solo puede ver historial ─────────────────────
+    function checkEliminated() {
+      if (!currentPlayer) return;
+      const dead = !!eliminated[sanitizeKey(currentPlayer)];
+      const actionZone = document.getElementById('action-zone');
+      const deadNotice = document.getElementById('dead-notice');
+      actionZone.style.display = dead ? 'none' : 'block';
+      deadNotice.style.display = dead ? 'block' : 'none';
+    }
+
+    // ── MISIÓN ───────────────────────────────────────────────────
     function renderMission(name) {
       const key     = sanitizeKey(name);
       const mission = missions[key];
@@ -203,24 +185,23 @@
       const pending = document.getElementById('mission-pending');
       const rows    = document.getElementById('mission-rows');
       const histSection = document.getElementById('history-section');
-      const deathBtn = document.getElementById('btn-confirm-death');
+      const btnDeath = document.getElementById('btn-confirm-death');
+      const btnDet   = document.getElementById('btn-detective');
 
       card.style.display = 'block';
-
       if (mission) {
         pending.style.display = 'none';
         rows.style.display    = 'block';
         document.getElementById('mission-objetivo').textContent = mission.objetivo;
         document.getElementById('mission-arma').textContent     = mission.arma;
         document.getElementById('mission-lugar').textContent    = mission.lugar;
-        deathBtn.style.display = 'block';
-
-        // Historial de víctimas anteriores
+        btnDeath.style.display = 'block';
+        btnDet.style.display   = 'block';
         const history = mission.history || [];
         if (history.length > 0) {
           histSection.style.display = 'block';
-          document.getElementById('history-list').innerHTML = history.map(h => `
-            <div class="history-entry">
+          document.getElementById('history-list').innerHTML = history.map(h =>
+            `<div class="history-entry">
               <span class="history-victim">💀 ${h.victim}</span>
               <span class="history-sub">${h.arma} · ${h.lugar}</span>
             </div>`).join('');
@@ -230,17 +211,19 @@
       } else {
         pending.style.display = 'block';
         rows.style.display    = 'none';
-        deathBtn.style.display = 'none';
+        btnDeath.style.display = 'none';
+        btnDet.style.display   = 'none';
         histSection.style.display = 'none';
       }
     }
 
-    // ── CONFIRMAR MUERTE ─────────────────────────────────────────
+    // ── PANEL MUERTE ─────────────────────────────────────────────
     window.toggleDeathPanel = function() {
-      const panel = document.getElementById('death-panel');
-      confirmingDeath = !confirmingDeath;
-      panel.classList.toggle('visible', confirmingDeath);
-      if (confirmingDeath) {
+      showingDeath = !showingDeath;
+      showingDetective = false;
+      document.getElementById('death-panel').classList.toggle('visible', showingDeath);
+      document.getElementById('detective-panel').classList.remove('visible');
+      if (showingDeath) {
         document.getElementById('death-input').value = '';
         document.getElementById('death-error').classList.remove('visible');
         setTimeout(() => document.getElementById('death-input').focus(), 100);
@@ -251,77 +234,44 @@
       const val   = document.getElementById('death-input').value;
       const input = document.getElementById('death-input');
       const err   = document.getElementById('death-error');
-
-      // Buscar a qué persona corresponde este código
-      const victim = Object.keys(PLAYER_CODES).find(n => PLAYER_CODES[n] === val);
-
-      // Verificar que la víctima es el objetivo actual del jugador
-      const myKey     = sanitizeKey(currentPlayer);
-      const myMission = missions[myKey];
-
+      const victim = PARTICIPANTS.find(n => PLAYER_CODES[n] === val);
+      const myMission = missions[sanitizeKey(currentPlayer)];
       if (!victim) {
-        input.classList.add('error');
-        err.textContent = 'Código incorrecto.';
-        err.classList.add('visible');
-        setTimeout(() => input.classList.remove('error'), 600);
-        input.value = '';
-        return;
+        triggerError(input, err, 'Código incorrecto.'); return;
       }
-
       if (!myMission || myMission.objetivo !== victim) {
-        input.classList.add('error');
-        err.textContent = `${victim} no es tu objetivo actual.`;
-        err.classList.add('visible');
-        setTimeout(() => input.classList.remove('error'), 600);
-        input.value = '';
-        return;
+        triggerError(input, err, `${victim} no es tu objetivo.`); return;
       }
-
-      // ✅ Muerte válida
-      confirmDeath(currentPlayer, victim);
+      confirmDeath(currentPlayer, victim, myMission.arma, myMission.lugar);
     };
 
-    async function confirmDeath(killer, victim) {
+    async function confirmDeath(killer, victim, arma, lugar) {
       const killerKey = sanitizeKey(killer);
       const victimKey = sanitizeKey(victim);
       const killerMission = missions[killerKey];
       const victimMission = missions[victimKey];
+      const prevHistory   = killerMission.history || [];
+      const now = new Date();
+      const timeStr = now.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'});
+      const dateStr = now.toLocaleDateString('es-ES',{day:'2-digit',month:'2-digit'});
 
-      // Historial del asesino: añadir víctima
-      const prevHistory = killerMission.history || [];
-      const newHistEntry = {
-        victim: victim,
-        arma:   killerMission.arma,
-        lugar:  killerMission.lugar,
-      };
+      const newObjetivo = victimMission ? victimMission.objetivo : '— Sin objetivo —';
 
-      // Nuevo objetivo = el objetivo que tenía la víctima
-      const newObjetivo = victimMission ? victimMission.objetivo : null;
-      const newArma     = victimMission ? victimMission.arma : killerMission.arma;
-      const newLugar    = victimMission ? victimMission.lugar : killerMission.lugar;
-
-      // Actualizar misión del asesino
-      await update(ref(db, `missions/${killerKey}`), {
-        objetivo: newObjetivo || '— Sin objetivo —',
-        arma:     newArma,
-        lugar:    newLugar,
-        history:  [...prevHistory, newHistEntry],
+      await update(ref(db,`missions/${killerKey}`), {
+        objetivo: newObjetivo,
+        arma:     victimMission ? victimMission.arma  : killerMission.arma,
+        lugar:    victimMission ? victimMission.lugar : killerMission.lugar,
+        history:  [...prevHistory, { victim, arma, lugar }],
       });
+      await update(ref(db,'eliminated'), { [victimKey]: true });
+      push(ref(db,'kills'), { killer, victim, arma, lugar, date: dateStr, time: timeStr });
+      writeLog(`${killer} eliminó a ${victim}`, '💀 Muerte');
 
-      // Marcar víctima como eliminada
-      await update(ref(db, 'eliminated'), { [victimKey]: true });
-
-      // Log
-      writeLog(`${killer} eliminó a ${victim}`, 'Muerte confirmada');
-
-      // Cerrar panel y actualizar vista
       document.getElementById('death-panel').classList.remove('visible');
       document.getElementById('death-input').value = '';
-      confirmingDeath = false;
-
-      // Mostrar mensaje de éxito
-      document.getElementById('death-success-name').textContent = victim;
-      document.getElementById('death-success-next').textContent = newObjetivo || '— Sin objetivo —';
+      showingDeath = false;
+      document.getElementById('death-success-name').textContent   = victim;
+      document.getElementById('death-success-next').textContent   = newObjetivo;
       document.getElementById('death-success-panel').classList.add('visible');
     }
 
@@ -329,262 +279,359 @@
       document.getElementById('death-success-panel').classList.remove('visible');
     };
 
+    // ── PANEL DETECTIVE ──────────────────────────────────────────
+    window.toggleDetectivePanel = function() {
+      showingDetective = !showingDetective;
+      showingDeath = false;
+      document.getElementById('detective-panel').classList.toggle('visible', showingDetective);
+      document.getElementById('death-panel').classList.remove('visible');
+      if (showingDetective) {
+        populateDetectiveSelects();
+        document.getElementById('detective-code-wrap').style.display = 'none';
+        document.getElementById('detective-error').classList.remove('visible');
+        document.getElementById('detective-result').classList.remove('visible');
+      }
+    };
+
+    function populateDetectiveSelects() {
+      const selAsesino = document.getElementById('det-asesino');
+      const selArma    = document.getElementById('det-arma');
+      const selLugar   = document.getElementById('det-lugar');
+      const selVictima = document.getElementById('det-victima');
+
+      selAsesino.innerHTML = '<option value="">— Selecciona —</option>' + PARTICIPANTS.map(n=>`<option value="${n}">${n}</option>`).join('');
+      selArma.innerHTML    = '<option value="">— Selecciona —</option>' + OBJETOS.map(o=>`<option value="${o}">${o}</option>`).join('');
+      selLugar.innerHTML   = '<option value="">— Selecciona —</option>' + LUGARES.map(l=>`<option value="${l}">${l}</option>`).join('');
+      selVictima.innerHTML = '<option value="">— Selecciona —</option>' + PARTICIPANTS.map(n=>`<option value="${n}">${n}</option>`).join('');
+    }
+
+    window.submitDetective = function() {
+      const asesino = document.getElementById('det-asesino').value;
+      const arma    = document.getElementById('det-arma').value;
+      const lugar   = document.getElementById('det-lugar').value;
+      const victima = document.getElementById('det-victima').value;
+      const err     = document.getElementById('detective-error');
+
+      if (!asesino || !arma || !lugar || !victima) {
+        err.textContent = 'Debes seleccionar todas las opciones.';
+        err.classList.add('visible'); return;
+      }
+      if (asesino === currentPlayer) {
+        err.textContent = 'No puedes acusarte a ti mismo.';
+        err.classList.add('visible'); return;
+      }
+
+      err.classList.remove('visible');
+      const mission = missions[sanitizeKey(asesino)];
+      const correct = mission &&
+        mission.objetivo === victima &&
+        mission.arma     === arma    &&
+        mission.lugar    === lugar;
+
+      if (correct) {
+        // Correcto — pedir código de la víctima para heredar objetivo
+        document.getElementById('detective-guess-result').textContent = `¡Correcto! ${asesino} iba a matar a ${victima} con ${arma} en ${lugar}.`;
+        document.getElementById('detective-code-wrap').style.display = 'flex';
+        document.getElementById('detective-code-input').value = '';
+        setTimeout(() => document.getElementById('detective-code-input').focus(), 100);
+      } else {
+        // Incorrecto — el detective muere
+        err.textContent = `Incorrecto. Tu acusación era errónea... y ahora tú también morirás.`;
+        err.classList.add('visible');
+        setTimeout(async () => {
+          await update(ref(db,'eliminated'), { [sanitizeKey(currentPlayer)]: true });
+          writeLog(`${currentPlayer} falló como detective`, '💀 Eliminado');
+          document.getElementById('detective-panel').classList.remove('visible');
+          showingDetective = false;
+        }, 2000);
+      }
+    };
+
+    window.checkDetectiveCode = function() {
+      const val    = document.getElementById('detective-code-input').value;
+      const input  = document.getElementById('detective-code-input');
+      const err    = document.getElementById('detective-error');
+      const victima = document.getElementById('det-victima').value;
+      const asesino = document.getElementById('det-asesino').value;
+
+      if (val !== PLAYER_CODES[victima]) {
+        triggerError(input, err, 'Código de la víctima incorrecto.'); return;
+      }
+
+      // Heredar objetivo de la víctima
+      const detKey      = sanitizeKey(currentPlayer);
+      const victimKey   = sanitizeKey(victima);
+      const asesinKey   = sanitizeKey(asesino);
+      const myMission   = missions[detKey];
+      const victimMission = missions[victimKey];
+      const now = new Date();
+      const timeStr = now.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'});
+      const dateStr = now.toLocaleDateString('es-ES',{day:'2-digit',month:'2-digit'});
+
+      const newObjetivo = victimMission ? victimMission.objetivo : '— Sin objetivo —';
+      const prevHistory = myMission ? (myMission.history || []) : [];
+
+      update(ref(db,`missions/${detKey}`), {
+        objetivo: newObjetivo,
+        arma:     victimMission ? victimMission.arma  : (myMission ? myMission.arma : '—'),
+        lugar:    victimMission ? victimMission.lugar : (myMission ? myMission.lugar : '—'),
+        history:  [...prevHistory, { victim: victima, arma: '(detective)', lugar: '(detective)' }],
+      });
+      update(ref(db,'eliminated'), { [victimKey]: true, [asesinKey]: true });
+      push(ref(db,'kills'), { killer: currentPlayer + ' (detective)', victim: asesino + ' + ' + victima, arma: '(detective)', lugar: '(detective)', date: dateStr, time: timeStr });
+      writeLog(`${currentPlayer} pilló a ${asesino} matando a ${victima}`, '🔍 Detective');
+
+      document.getElementById('detective-panel').classList.remove('visible');
+      showingDetective = false;
+      document.getElementById('death-success-name').textContent = `${asesino} y ${victima}`;
+      document.getElementById('death-success-next').textContent = newObjetivo;
+      document.getElementById('death-success-panel').classList.add('visible');
+    };
+
+    // ── HELPERS ──────────────────────────────────────────────────
+    function triggerError(input, err, msg) {
+      input.classList.add('error');
+      err.textContent = msg;
+      err.classList.add('visible');
+      setTimeout(() => input.classList.remove('error'), 600);
+      input.value = '';
+    }
+
     // ── LOG ──────────────────────────────────────────────────────
     function writeLog(name, method) {
-      const time = new Date().toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      push(ref(db, 'log'), { name, method, time });
+      const time = new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+      push(ref(db,'log'), { name, method, time });
     }
     function renderLog(entries) {
       const c = document.getElementById('log-list');
       if (!c) return;
       c.innerHTML = entries.length
-        ? entries.map(e => `<div class="log-entry"><span class="log-name">${e.name}</span><span class="log-method">${e.method}</span><span class="log-time">${e.time}</span></div>`).join('')
-        : '<p style="font-size:12px;opacity:0.4;text-align:center;font-style:italic;">Sin accesos registrados</p>';
+        ? entries.map(e=>`<div class="log-entry"><span class="log-name">${e.name}</span><span class="log-method">${e.method}</span><span class="log-time">${e.time}</span></div>`).join('')
+        : '<p style="font-size:12px;opacity:0.4;text-align:center;font-style:italic;">Sin registros</p>';
+    }
+    function renderKills(entries) {
+      const c = document.getElementById('kills-list');
+      if (!c) return;
+      c.innerHTML = entries.length
+        ? entries.map(e=>`
+            <div class="kill-entry">
+              <span class="kill-killer">🗡 ${e.killer}</span>
+              <span class="kill-arrow">→</span>
+              <span class="kill-victim">💀 ${e.victim}</span>
+              <span class="kill-detail">${e.arma} · ${e.lugar}</span>
+              <span class="kill-time">${e.date} ${e.time}</span>
+            </div>`).join('')
+        : '<p style="font-size:12px;opacity:0.4;text-align:center;font-style:italic;">Sin muertes registradas</p>';
     }
 
     // ── ADMIN ────────────────────────────────────────────────────
     window.resetGame = function() {
-      if (confirm('¿Resetear todos los datos? Esto borrará accesos, misiones y muertes.')) {
-        set(ref(db, '/'), null);
-      }
+      if (confirm('¿Resetear todos los datos?')) set(ref(db,'/'), null);
     };
-
     window.randomizeMissions = function() {
-      if (!confirm('¿Asignar misiones aleatorias? Esto sobreescribirá las anteriores.')) return;
-      function shuffle(arr) {
-        const a = [...arr];
-        for (let i = a.length - 1; i > 0; i--) {
-          const j = Math.floor(Math.random() * (i + 1));
-          [a[i], a[j]] = [a[j], a[i]];
-        }
-        return a;
+      if (!confirm('¿Asignar misiones aleatorias?')) return;
+      function shuffle(a) {
+        const b=[...a];
+        for(let i=b.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[b[i],b[j]]=[b[j],b[i]];}
+        return b;
       }
       const n = PARTICIPANTS.length;
-      const shuffledPlayers  = shuffle([...PARTICIPANTS]);
-      const shuffledArmas    = shuffle([...OBJETOS]);
-      const shuffledLugares  = shuffle([...LUGARES]);
-      const newMissions = {};
-      shuffledPlayers.forEach((name, i) => {
-        newMissions[sanitizeKey(name)] = {
-          objetivo: shuffledPlayers[(i + 1) % n],
-          arma:     shuffledArmas[i % shuffledArmas.length],
-          lugar:    shuffledLugares[i % shuffledLugares.length],
-          history:  [],
-        };
+      const sp = shuffle([...PARTICIPANTS]);
+      const sa = shuffle([...OBJETOS]);
+      const sl = shuffle([...LUGARES]);
+      const nm = {};
+      sp.forEach((name,i) => {
+        nm[sanitizeKey(name)] = { objetivo: sp[(i+1)%n], arma: sa[i%sa.length], lugar: sl[i%sl.length], history: [] };
       });
-      set(ref(db, 'missions'), newMissions).then(() => {
-        // También resetear eliminados al randomizar
-        set(ref(db, 'eliminated'), null);
-        document.getElementById('randomize-status').textContent = '✦ Misiones asignadas correctamente';
-        setTimeout(() => document.getElementById('randomize-status').textContent = '', 3000);
-      });
+      set(ref(db,'missions'), nm);
+      set(ref(db,'eliminated'), null);
+      document.getElementById('randomize-status').textContent = '✦ Misiones asignadas';
+      setTimeout(()=>document.getElementById('randomize-status').textContent='', 3000);
     };
   </script>
 
   <style>
     :root {
-      --gold: #c9a84c;
-      --gold-light: #e8cc80;
-      --crimson: #8b1a1a;
-      --darker: #080604;
-      --parchment: #f5e6c8;
-      --parchment-dark: #d4b896;
-      --ink: #1a1008;
+      --gold:#c9a84c; --gold-light:#e8cc80; --crimson:#8b1a1a;
+      --darker:#080604; --parchment:#f5e6c8; --parchment-dark:#d4b896; --ink:#1a1008;
+      --red-soft: #c0504a; --red-dim: rgba(192,80,74,0.7);
     }
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      background-color: var(--darker);
-      font-family: 'Crimson Text', serif;
-      color: var(--parchment);
-      min-height: 100vh;
-      display: flex; align-items: center; justify-content: center;
-      overflow-x: hidden; position: relative;
-    }
-    body::before {
-      content: ''; position: fixed; inset: 0;
-      background:
-        radial-gradient(ellipse at 20% 50%, rgba(139,26,26,0.15) 0%, transparent 60%),
-        radial-gradient(ellipse at 80% 20%, rgba(201,168,76,0.08) 0%, transparent 50%),
-        repeating-linear-gradient(0deg, transparent, transparent 60px, rgba(201,168,76,0.03) 60px, rgba(201,168,76,0.03) 61px),
-        repeating-linear-gradient(90deg, transparent, transparent 60px, rgba(201,168,76,0.03) 60px, rgba(201,168,76,0.03) 61px);
-      pointer-events: none; z-index: 0;
-    }
-    body::after {
-      content: ''; position: fixed; top: -200px; left: 50%;
-      transform: translateX(-50%); width: 600px; height: 600px;
-      background: radial-gradient(ellipse, rgba(201,168,76,0.12) 0%, transparent 70%);
-      animation: flicker 3s ease-in-out infinite alternate;
-      pointer-events: none; z-index: 0;
-    }
-    @keyframes flicker {
-      0%   { opacity: 0.6; transform: translateX(-50%) scale(1); }
-      25%  { opacity: 1;   transform: translateX(-50%) scale(1.05); }
-      50%  { opacity: 0.7; transform: translateX(-50%) scale(0.98); }
-      75%  { opacity: 0.9; transform: translateX(-50%) scale(1.02); }
-      100% { opacity: 0.5; transform: translateX(-50%) scale(1); }
-    }
+    *{margin:0;padding:0;box-sizing:border-box;}
+    body{background:var(--darker);font-family:'Crimson Text',serif;color:var(--parchment);min-height:100vh;display:flex;align-items:center;justify-content:center;overflow-x:hidden;position:relative;}
+    body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellipse at 20% 50%,rgba(139,26,26,.15) 0%,transparent 60%),radial-gradient(ellipse at 80% 20%,rgba(201,168,76,.08) 0%,transparent 50%),repeating-linear-gradient(0deg,transparent,transparent 60px,rgba(201,168,76,.03) 60px,rgba(201,168,76,.03) 61px),repeating-linear-gradient(90deg,transparent,transparent 60px,rgba(201,168,76,.03) 60px,rgba(201,168,76,.03) 61px);pointer-events:none;z-index:0;}
+    body::after{content:'';position:fixed;top:-200px;left:50%;transform:translateX(-50%);width:600px;height:600px;background:radial-gradient(ellipse,rgba(201,168,76,.12) 0%,transparent 70%);animation:flicker 3s ease-in-out infinite alternate;pointer-events:none;z-index:0;}
+    @keyframes flicker{0%{opacity:.6;transform:translateX(-50%) scale(1)}25%{opacity:1;transform:translateX(-50%) scale(1.05)}50%{opacity:.7;transform:translateX(-50%) scale(.98)}75%{opacity:.9;transform:translateX(-50%) scale(1.02)}100%{opacity:.5;transform:translateX(-50%) scale(1)}}
 
-    .container { position: relative; z-index: 1; width: 100%; max-width: 560px; padding: 20px; }
+    .container{position:relative;z-index:1;width:100%;max-width:560px;padding:20px;}
+    .card{background:linear-gradient(160deg,#1a1208 0%,#0f0c06 50%,#150e07 100%);border:1px solid rgba(201,168,76,.3);border-radius:2px;padding:44px 36px;box-shadow:0 0 60px rgba(0,0,0,.9),0 0 120px rgba(0,0,0,.6),inset 0 1px 0 rgba(201,168,76,.15),inset 0 -1px 0 rgba(201,168,76,.05);animation:cardReveal 1s ease forwards;opacity:0;transform:translateY(20px);}
+    @keyframes cardReveal{to{opacity:1;transform:translateY(0)}}
 
-    .card {
-      background: linear-gradient(160deg, #1a1208 0%, #0f0c06 50%, #150e07 100%);
-      border: 1px solid rgba(201,168,76,0.3); border-radius: 2px; padding: 44px 36px;
-      box-shadow: 0 0 60px rgba(0,0,0,0.9), 0 0 120px rgba(0,0,0,0.6),
-        inset 0 1px 0 rgba(201,168,76,0.15), inset 0 -1px 0 rgba(201,168,76,0.05);
-      animation: cardReveal 1s ease forwards; opacity: 0; transform: translateY(20px);
-    }
-    @keyframes cardReveal { to { opacity: 1; transform: translateY(0); } }
+    .eyebrow{text-align:center;letter-spacing:.35em;font-size:10px;color:var(--gold);text-transform:uppercase;margin-bottom:6px;opacity:.7;}
+    .title{font-family:'Playfair Display',serif;font-size:36px;font-weight:900;text-align:center;color:var(--gold);line-height:1.1;text-shadow:0 0 40px rgba(201,168,76,.4);letter-spacing:-.01em;}
+    .subtitle{font-family:'Playfair Display',serif;font-style:italic;font-size:15px;text-align:center;color:var(--parchment-dark);margin-top:6px;letter-spacing:.05em;}
+    .divider{display:flex;align-items:center;gap:12px;margin:22px 0;}
+    .divider-line{flex:1;height:1px;background:linear-gradient(90deg,transparent,rgba(201,168,76,.4),transparent);}
+    .divider-icon{font-size:16px;}
 
-    .eyebrow { text-align: center; letter-spacing: 0.35em; font-size: 10px; color: var(--gold); text-transform: uppercase; margin-bottom: 6px; opacity: 0.7; }
-    .title { font-family: 'Playfair Display', serif; font-size: 36px; font-weight: 900; text-align: center; color: var(--gold); line-height: 1.1; text-shadow: 0 0 40px rgba(201,168,76,0.4); letter-spacing: -0.01em; }
-    .subtitle { font-family: 'Playfair Display', serif; font-style: italic; font-size: 15px; text-align: center; color: var(--parchment-dark); margin-top: 6px; letter-spacing: 0.05em; }
-    .divider { display: flex; align-items: center; gap: 12px; margin: 22px 0; }
-    .divider-line { flex: 1; height: 1px; background: linear-gradient(90deg, transparent, rgba(201,168,76,0.4), transparent); }
-    .divider-icon { font-size: 16px; }
+    .intro{font-size:15px;line-height:1.75;color:var(--parchment-dark);text-align:center;font-style:italic;margin-bottom:28px;}
+    .intro strong{color:var(--parchment);font-style:normal;letter-spacing:.05em;}
 
-    .intro { font-size: 15px; line-height: 1.75; color: var(--parchment-dark); text-align: center; font-style: italic; margin-bottom: 28px; }
-    .intro strong { color: var(--parchment); font-style: normal; letter-spacing: 0.05em; }
+    .list-label{font-size:11px;letter-spacing:.25em;text-transform:uppercase;color:var(--gold);opacity:.6;margin-bottom:12px;}
+    .participants-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-bottom:28px;}
+    .grid-spacer{visibility:hidden;pointer-events:none;}
+    .participant-btn{padding:11px 8px;background:rgba(201,168,76,.05);border:1px solid rgba(201,168,76,.18);color:var(--parchment);font-family:'Crimson Text',serif;font-size:15px;text-align:center;cursor:pointer;transition:all .2s ease;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;min-height:52px;line-height:1.2;}
+    .participant-btn:hover:not(.taken):not(.dead){background:rgba(201,168,76,.12);border-color:rgba(201,168,76,.6);color:var(--gold-light);transform:translateY(-1px);box-shadow:0 4px 12px rgba(0,0,0,.4);}
+    .participant-btn.taken{opacity:.3;color:var(--parchment-dark);}
+    .participant-btn.dead{opacity:.2;color:var(--parchment-dark);text-decoration:line-through;}
+    .lock-icon{font-size:10px;display:block;}
 
-    .list-label { font-size: 11px; letter-spacing: 0.25em; text-transform: uppercase; color: var(--gold); opacity: 0.6; margin-bottom: 12px; }
-    .participants-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin-bottom: 28px; }
-    .grid-spacer { visibility: hidden; pointer-events: none; }
-    .participant-btn {
-      padding: 11px 8px; background: rgba(201,168,76,0.05); border: 1px solid rgba(201,168,76,0.18);
-      color: var(--parchment); font-family: 'Crimson Text', serif; font-size: 15px;
-      text-align: center; cursor: pointer; transition: all 0.2s ease;
-      display: flex; flex-direction: column; align-items: center; justify-content: center;
-      gap: 4px; min-height: 52px; line-height: 1.2;
-    }
-    .participant-btn:hover:not(.taken):not(.dead) { background: rgba(201,168,76,0.12); border-color: rgba(201,168,76,0.6); color: var(--gold-light); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
-    .participant-btn.taken { opacity: 0.3; color: var(--parchment-dark); }
-    .participant-btn.dead  { opacity: 0.2; color: var(--parchment-dark); text-decoration: line-through; }
-    .lock-icon { font-size: 10px; display: block; }
+    /* Loading */
+    .loading-overlay{position:fixed;inset:0;background:var(--darker);display:flex;align-items:center;justify-content:center;z-index:999;transition:opacity .5s ease;}
+    .loading-overlay.hidden{opacity:0;pointer-events:none;}
+    .loading-dot{width:8px;height:8px;background:var(--gold);border-radius:50%;animation:dotPulse 1.2s ease infinite;margin:0 4px;}
+    .loading-dot:nth-child(2){animation-delay:.2s}.loading-dot:nth-child(3){animation-delay:.4s}
+    @keyframes dotPulse{0%,100%{opacity:.2;transform:scale(.8)}50%{opacity:1;transform:scale(1.2)}}
 
-    .loading-overlay { position: fixed; inset: 0; background: var(--darker); display: flex; align-items: center; justify-content: center; z-index: 999; transition: opacity 0.5s ease; }
-    .loading-overlay.hidden { opacity: 0; pointer-events: none; }
-    .loading-dot { width: 8px; height: 8px; background: var(--gold); border-radius: 50%; animation: dotPulse 1.2s ease infinite; margin: 0 4px; }
-    .loading-dot:nth-child(2) { animation-delay: 0.2s; }
-    .loading-dot:nth-child(3) { animation-delay: 0.4s; }
-    @keyframes dotPulse { 0%,100% { opacity: 0.2; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1.2); } }
+    /* Code panel */
+    .code-panel{display:none;flex-direction:column;gap:16px;animation:fadeIn .4s ease;}
+    .code-panel.visible{display:flex;}
+    @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+    .code-message{font-size:14px;line-height:1.7;color:var(--parchment-dark);text-align:center;font-style:italic;}
+    .code-input-wrap{display:flex;gap:10px;}
+    .code-input{flex:1;background:rgba(0,0,0,.5);border:1px solid rgba(201,168,76,.3);color:var(--gold-light);font-family:'Playfair Display',serif;font-size:22px;letter-spacing:.4em;text-align:center;padding:12px;outline:none;transition:border-color .2s;}
+    .code-input:focus{border-color:rgba(201,168,76,.8);box-shadow:0 0 20px rgba(201,168,76,.1);}
+    .code-input.error{border-color:var(--crimson);animation:shake .4s ease;}
+    @keyframes shake{0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-6px)}40%,80%{transform:translateX(6px)}}
+    .btn-confirm{padding:12px 20px;background:var(--gold);color:var(--ink);border:none;font-family:'Playfair Display',serif;font-size:13px;font-weight:700;letter-spacing:.1em;cursor:pointer;text-transform:uppercase;transition:all .2s;white-space:nowrap;}
+    .btn-confirm:hover{background:var(--gold-light);box-shadow:0 0 20px rgba(201,168,76,.3);}
+    .btn-back{background:none;border:1px solid rgba(201,168,76,.2);color:var(--parchment-dark);font-family:'Crimson Text',serif;font-size:13px;letter-spacing:.15em;text-transform:uppercase;cursor:pointer;padding:8px;transition:all .2s;}
+    .btn-back:hover{border-color:rgba(201,168,76,.5);color:var(--parchment);}
+    .error-msg{color:var(--crimson);font-size:13px;text-align:center;display:none;font-style:italic;}
+    .error-msg.visible{display:block;}
 
-    .code-panel { display: none; flex-direction: column; gap: 16px; animation: fadeIn 0.4s ease; }
-    .code-panel.visible { display: flex; }
-    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-    .code-message { font-size: 14px; line-height: 1.7; color: var(--parchment-dark); text-align: center; font-style: italic; }
-    .code-input-wrap { display: flex; gap: 10px; }
-    .code-input { flex: 1; background: rgba(0,0,0,0.5); border: 1px solid rgba(201,168,76,0.3); color: var(--gold-light); font-family: 'Playfair Display', serif; font-size: 22px; letter-spacing: 0.4em; text-align: center; padding: 12px; outline: none; transition: border-color 0.2s; }
-    .code-input:focus { border-color: rgba(201,168,76,0.8); box-shadow: 0 0 20px rgba(201,168,76,0.1); }
-    .code-input.error { border-color: var(--crimson); animation: shake 0.4s ease; }
-    @keyframes shake { 0%,100% { transform: translateX(0); } 20%,60% { transform: translateX(-6px); } 40%,80% { transform: translateX(6px); } }
-    .btn-confirm { padding: 12px 20px; background: var(--gold); color: var(--ink); border: none; font-family: 'Playfair Display', serif; font-size: 13px; font-weight: 700; letter-spacing: 0.1em; cursor: pointer; text-transform: uppercase; transition: all 0.2s; white-space: nowrap; }
-    .btn-confirm:hover { background: var(--gold-light); box-shadow: 0 0 20px rgba(201,168,76,0.3); }
-    .btn-back { background: none; border: 1px solid rgba(201,168,76,0.2); color: var(--parchment-dark); font-family: 'Crimson Text', serif; font-size: 13px; letter-spacing: 0.15em; text-transform: uppercase; cursor: pointer; padding: 8px; transition: all 0.2s; }
-    .btn-back:hover { border-color: rgba(201,168,76,0.5); color: var(--parchment); }
-    .error-msg { color: var(--crimson); font-size: 13px; text-align: center; display: none; font-style: italic; }
-    .error-msg.visible { display: block; }
+    /* Success screen */
+    .success-screen{display:none;flex-direction:column;align-items:center;gap:20px;animation:fadeIn .6s ease;text-align:center;}
+    .success-screen.visible{display:flex;}
+    .btn-back-home{align-self:flex-start;background:none;border:none;color:var(--gold);opacity:.5;font-family:'Crimson Text',serif;font-size:14px;letter-spacing:.15em;cursor:pointer;padding:0;transition:opacity .2s;display:flex;align-items:center;gap:6px;}
+    .btn-back-home:hover{opacity:1;}
+    .success-name{font-family:'Playfair Display',serif;font-size:38px;font-weight:900;color:var(--gold);text-shadow:0 0 40px rgba(201,168,76,.4);letter-spacing:-.01em;line-height:1.1;}
 
-    /* ── SUCCESS SCREEN ── */
-    .success-screen { display: none; flex-direction: column; align-items: center; gap: 20px; animation: fadeIn 0.6s ease; text-align: center; }
-    .success-screen.visible { display: flex; }
-    .btn-back-home { align-self: flex-start; background: none; border: none; color: var(--gold); opacity: 0.5; font-family: 'Crimson Text', serif; font-size: 14px; letter-spacing: 0.15em; cursor: pointer; padding: 0; transition: opacity 0.2s; display: flex; align-items: center; gap: 6px; }
-    .btn-back-home:hover { opacity: 1; }
-    .success-name { font-family: 'Playfair Display', serif; font-size: 38px; font-weight: 900; color: var(--gold); text-shadow: 0 0 40px rgba(201,168,76,0.4); letter-spacing: -0.01em; line-height: 1.1; }
+    .game-explanation{display:flex;flex-direction:column;gap:14px;text-align:left;width:100%;}
+    .game-text{font-size:15px;line-height:1.75;color:var(--parchment-dark);font-style:italic;}
+    .game-text strong{color:var(--parchment);font-style:normal;}
 
-    .game-explanation { display: flex; flex-direction: column; gap: 16px; text-align: left; width: 100%; }
-    .game-text { font-size: 15px; line-height: 1.75; color: var(--parchment-dark); font-style: italic; }
-    .game-text strong { color: var(--parchment); font-style: normal; }
-    .game-warning { border: 1px solid rgba(201,168,76,0.3); padding: 18px 20px; background: rgba(201,168,76,0.04); text-align: center; }
-    .game-warning p { font-family: 'Playfair Display', serif; font-size: 15px; color: var(--parchment); line-height: 1.6; font-style: italic; }
+    /* Mission card */
+    .mission-card{width:100%;border:1px solid rgba(201,168,76,.35);background:rgba(201,168,76,.04);display:none;}
+    .mission-card-header{padding:12px 20px;border-bottom:1px solid rgba(201,168,76,.15);font-size:10px;letter-spacing:.3em;text-transform:uppercase;color:var(--gold);opacity:.6;}
+    .mission-pending{padding:16px 20px;font-style:italic;font-size:14px;color:var(--parchment-dark);text-align:center;line-height:1.6;}
+    .mission-rows{padding:8px 0;}
+    .mission-row{display:flex;align-items:center;gap:16px;padding:14px 20px;border-bottom:1px solid rgba(201,168,76,.08);}
+    .mission-row:last-child{border-bottom:none;}
+    .mission-icon{font-size:20px;flex-shrink:0;width:28px;text-align:center;}
+    .mission-label{font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold);opacity:.5;margin-bottom:3px;}
+    .mission-value{font-family:'Playfair Display',serif;font-size:18px;color:var(--parchment);font-weight:700;}
 
-    /* ── MISSION CARD ── */
-    .mission-card { width: 100%; border: 1px solid rgba(201,168,76,0.35); background: rgba(201,168,76,0.04); display: none; }
-    .mission-card-header { padding: 12px 20px; border-bottom: 1px solid rgba(201,168,76,0.15); font-size: 10px; letter-spacing: 0.3em; text-transform: uppercase; color: var(--gold); opacity: 0.6; }
-    .mission-pending { padding: 16px 20px; font-style: italic; font-size: 14px; color: var(--parchment-dark); text-align: center; line-height: 1.6; }
-    .mission-rows { padding: 8px 0; }
-    .mission-row { display: flex; align-items: center; gap: 16px; padding: 14px 20px; border-bottom: 1px solid rgba(201,168,76,0.08); }
-    .mission-row:last-child { border-bottom: none; }
-    .mission-icon { font-size: 20px; flex-shrink: 0; width: 28px; text-align: center; }
-    .mission-label { font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--gold); opacity: 0.5; margin-bottom: 3px; }
-    .mission-value { font-family: 'Playfair Display', serif; font-size: 18px; color: var(--parchment); font-weight: 700; }
+    /* Dead notice */
+    .dead-notice{display:none;text-align:center;font-style:italic;color:var(--parchment-dark);opacity:.5;font-size:14px;padding:16px;border:1px solid rgba(139,26,26,.2);}
 
-    /* ── BOTÓN CONFIRMAR MUERTE ── */
-    .btn-death {
-      width: 100%; padding: 14px; background: rgba(139,26,26,0.15);
-      border: 1px solid rgba(139,26,26,0.5); color: #e07070;
-      font-family: 'Playfair Display', serif; font-size: 14px; font-weight: 700;
-      letter-spacing: 0.1em; text-transform: uppercase; cursor: pointer;
-      transition: all 0.2s; display: none;
-    }
-    .btn-death:hover { background: rgba(139,26,26,0.3); border-color: var(--crimson); }
+    /* Action zone */
+    #action-zone{width:100%;}
 
-    /* ── PANEL CONFIRMAR MUERTE ── */
-    .death-panel { display: none; flex-direction: column; gap: 14px; width: 100%; animation: fadeIn 0.3s ease; border: 1px solid rgba(139,26,26,0.4); padding: 20px; background: rgba(139,26,26,0.06); }
-    .death-panel.visible { display: flex; }
-    .death-title { font-size: 11px; letter-spacing: 0.25em; text-transform: uppercase; color: #e07070; opacity: 0.8; text-align: center; }
-    .death-message { font-size: 14px; color: var(--parchment-dark); font-style: italic; text-align: center; line-height: 1.6; }
-    .death-input-wrap { display: flex; gap: 10px; }
-    .death-input { flex: 1; background: rgba(0,0,0,0.5); border: 1px solid rgba(139,26,26,0.4); color: #e07070; font-family: 'Playfair Display', serif; font-size: 22px; letter-spacing: 0.4em; text-align: center; padding: 12px; outline: none; transition: border-color 0.2s; }
-    .death-input:focus { border-color: rgba(139,26,26,0.8); }
-    .death-input.error { animation: shake 0.4s ease; }
-    .death-error { color: var(--crimson); font-size: 13px; text-align: center; display: none; font-style: italic; }
-    .death-error.visible { display: block; }
-    .btn-death-confirm { padding: 12px 20px; background: var(--crimson); color: var(--parchment); border: none; font-family: 'Playfair Display', serif; font-size: 13px; font-weight: 700; letter-spacing: 0.1em; cursor: pointer; text-transform: uppercase; transition: all 0.2s; white-space: nowrap; }
-    .btn-death-confirm:hover { background: #a02020; }
-    .btn-cancel { background: none; border: 1px solid rgba(201,168,76,0.2); color: var(--parchment-dark); font-family: 'Crimson Text', serif; font-size: 13px; letter-spacing: 0.15em; text-transform: uppercase; cursor: pointer; padding: 8px; transition: all 0.2s; }
-    .btn-cancel:hover { border-color: rgba(201,168,76,0.5); color: var(--parchment); }
+    /* Botón confirmar muerte */
+    .btn-death{width:100%;padding:14px;background:rgba(139,26,26,.15);border:1px solid rgba(139,26,26,.5);color:#e07070;font-family:'Playfair Display',serif;font-size:14px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;cursor:pointer;transition:all .2s;display:none;}
+    .btn-death:hover{background:rgba(139,26,26,.3);}
 
-    /* ── MUERTE CONFIRMADA (overlay) ── */
-    .death-success-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 500; align-items: center; justify-content: center; padding: 20px; }
-    .death-success-overlay.visible { display: flex; }
-    .death-success-card { background: linear-gradient(160deg, #1a0808 0%, #0f0606 100%); border: 1px solid rgba(139,26,26,0.6); padding: 40px 32px; max-width: 400px; width: 100%; text-align: center; display: flex; flex-direction: column; gap: 20px; animation: fadeIn 0.4s ease; }
-    .death-success-icon { font-size: 52px; }
-    .death-success-title { font-family: 'Playfair Display', serif; font-size: 22px; color: #e07070; font-weight: 700; }
-    .death-success-text { font-size: 15px; color: var(--parchment-dark); font-style: italic; line-height: 1.7; }
-    .death-success-next { font-family: 'Playfair Display', serif; font-size: 26px; color: var(--gold); font-weight: 900; }
-    .death-success-label { font-size: 10px; letter-spacing: 0.3em; text-transform: uppercase; color: var(--gold); opacity: 0.5; }
-    .btn-death-close { padding: 12px; background: var(--gold); color: var(--ink); border: none; font-family: 'Playfair Display', serif; font-size: 13px; font-weight: 700; letter-spacing: 0.1em; cursor: pointer; text-transform: uppercase; transition: all 0.2s; }
-    .btn-death-close:hover { background: var(--gold-light); }
+    /* Botón detective */
+    .btn-detective{width:100%;padding:10px;background:rgba(139,26,26,.08);border:1px solid rgba(139,26,26,.25);color:var(--red-dim);font-family:'Crimson Text',serif;font-size:13px;letter-spacing:.1em;text-transform:uppercase;cursor:pointer;transition:all .2s;display:none;margin-top:6px;}
+    .btn-detective:hover{background:rgba(139,26,26,.18);color:var(--red-soft);}
 
-    /* ── HISTORIAL ── */
-    .history-section { width: 100%; }
-    .history-title { font-size: 10px; letter-spacing: 0.25em; text-transform: uppercase; color: var(--gold); opacity: 0.3; margin-bottom: 8px; text-align: center; }
-    .history-entry { padding: 10px 16px; border: 1px solid rgba(201,168,76,0.08); background: rgba(0,0,0,0.2); margin-bottom: 6px; opacity: 0.35; filter: blur(0.3px); }
-    .history-victim { font-family: 'Playfair Display', serif; font-size: 15px; color: var(--parchment-dark); display: block; margin-bottom: 3px; }
-    .history-sub { font-size: 12px; color: var(--parchment-dark); opacity: 0.6; font-style: italic; }
+    /* Panel muerte */
+    .death-panel{display:none;flex-direction:column;gap:14px;width:100%;animation:fadeIn .3s ease;border:1px solid rgba(139,26,26,.4);padding:20px;background:rgba(139,26,26,.06);}
+    .death-panel.visible{display:flex;}
+    .panel-title{font-size:11px;letter-spacing:.25em;text-transform:uppercase;color:#e07070;opacity:.8;text-align:center;}
+    .panel-message{font-size:14px;color:var(--parchment-dark);font-style:italic;text-align:center;line-height:1.6;}
+    .death-input-wrap{display:flex;gap:10px;width:100%;}
+    .death-input{flex:1;min-width:0;background:rgba(0,0,0,.5);border:1px solid rgba(139,26,26,.4);color:#e07070;font-family:'Playfair Display',serif;font-size:22px;letter-spacing:.4em;text-align:center;padding:12px;outline:none;transition:border-color .2s;}
+    .death-input:focus{border-color:rgba(139,26,26,.8);}
+    .death-input.error{animation:shake .4s ease;}
+    .death-error{color:var(--crimson);font-size:13px;text-align:center;display:none;font-style:italic;}
+    .death-error.visible{display:block;}
+    .btn-death-confirm{padding:12px 18px;background:var(--crimson);color:var(--parchment);border:none;font-family:'Playfair Display',serif;font-size:13px;font-weight:700;letter-spacing:.1em;cursor:pointer;text-transform:uppercase;transition:all .2s;white-space:nowrap;flex-shrink:0;}
+    .btn-death-confirm:hover{background:#a02020;}
+    .btn-cancel{background:none;border:1px solid rgba(201,168,76,.2);color:var(--parchment-dark);font-family:'Crimson Text',serif;font-size:13px;letter-spacing:.15em;text-transform:uppercase;cursor:pointer;padding:8px;transition:all .2s;}
+    .btn-cancel:hover{border-color:rgba(201,168,76,.5);color:var(--parchment);}
 
-    /* ── ADMIN ── */
-    .admin-panel { margin-top: 40px; border-top: 1px solid rgba(201,168,76,0.1); padding-top: 20px; display: none; width: 100%; }
-    .admin-panel.visible { display: block; }
-    .admin-title { font-size: 10px; letter-spacing: 0.3em; text-transform: uppercase; color: var(--gold); opacity: 0.4; margin-bottom: 16px; text-align: center; }
-    .btn-randomize { width: 100%; padding: 14px; background: rgba(201,168,76,0.1); border: 1px solid rgba(201,168,76,0.4); color: var(--gold); font-family: 'Playfair Display', serif; font-size: 14px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; cursor: pointer; transition: all 0.2s; margin-bottom: 8px; }
-    .btn-randomize:hover { background: rgba(201,168,76,0.2); }
-    .randomize-status { font-size: 12px; color: var(--gold); opacity: 0.7; text-align: center; font-style: italic; min-height: 18px; margin-bottom: 20px; }
-    .log-entry { font-size: 12px; color: var(--parchment-dark); opacity: 0.6; padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.04); display: flex; justify-content: space-between; gap: 12px; }
-    .log-time { opacity: 0.5; white-space: nowrap; font-size: 11px; }
-    .log-name { font-style: italic; }
-    .log-method { color: var(--gold); opacity: 0.6; }
-    .btn-reset { margin-top: 16px; width: 100%; background: none; border: 1px solid rgba(139,26,26,0.4); color: rgba(139,26,26,0.6); font-family: 'Crimson Text', serif; font-size: 12px; letter-spacing: 0.2em; text-transform: uppercase; padding: 8px; cursor: pointer; transition: all 0.2s; }
-    .btn-reset:hover { border-color: var(--crimson); color: var(--crimson); }
+    /* Panel detective */
+    .detective-panel{display:none;flex-direction:column;gap:14px;width:100%;animation:fadeIn .3s ease;border:1px solid rgba(139,26,26,.25);padding:20px;background:rgba(139,26,26,.04);}
+    .detective-panel.visible{display:flex;}
+    .det-select-wrap{display:flex;flex-direction:column;gap:10px;}
+    .det-field{display:flex;flex-direction:column;gap:4px;}
+    .det-label{font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold);opacity:.5;}
+    .det-select{background:rgba(0,0,0,.5);border:1px solid rgba(201,168,76,.2);color:var(--parchment);font-family:'Crimson Text',serif;font-size:15px;padding:10px 12px;outline:none;width:100%;transition:border-color .2s;appearance:none;cursor:pointer;}
+    .det-select:focus{border-color:rgba(201,168,76,.6);}
+    .btn-det-submit{width:100%;padding:12px;background:rgba(201,168,76,.1);border:1px solid rgba(201,168,76,.3);color:var(--gold);font-family:'Playfair Display',serif;font-size:13px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;cursor:pointer;transition:all .2s;}
+    .btn-det-submit:hover{background:rgba(201,168,76,.2);}
+    .detective-error{color:var(--crimson);font-size:13px;text-align:center;display:none;font-style:italic;}
+    .detective-error.visible{display:block;}
+    .detective-guess-result{font-size:14px;color:var(--gold);font-style:italic;text-align:center;line-height:1.6;display:none;}
+    .detective-guess-result.visible{display:block;}
+    .detective-code-wrap{display:none;gap:10px;width:100%;}
 
-    .sync-dot { position: fixed; top: 14px; right: 14px; width: 7px; height: 7px; border-radius: 50%; background: #2ecc71; box-shadow: 0 0 6px #2ecc71; z-index: 100; animation: syncPulse 2s ease infinite; }
-    @keyframes syncPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+    /* Historial */
+    .history-section{width:100%;}
+    .history-title{font-size:10px;letter-spacing:.25em;text-transform:uppercase;color:var(--gold);opacity:.3;margin-bottom:8px;text-align:center;}
+    .history-entry{padding:10px 16px;margin-bottom:6px;opacity:.25;}
+    .history-victim{font-family:'Playfair Display',serif;font-size:15px;color:var(--parchment-dark);display:block;margin-bottom:3px;}
+    .history-sub{font-size:12px;color:var(--parchment-dark);opacity:.6;font-style:italic;}
+
+    /* Muerte confirmada overlay */
+    .death-success-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:500;align-items:center;justify-content:center;padding:20px;}
+    .death-success-overlay.visible{display:flex;}
+    .death-success-card{background:linear-gradient(160deg,#1a0808 0%,#0f0606 100%);border:1px solid rgba(139,26,26,.6);padding:40px 32px;max-width:400px;width:100%;text-align:center;display:flex;flex-direction:column;gap:20px;animation:fadeIn .4s ease;}
+    .death-success-icon{font-size:52px;}
+    .death-success-title{font-family:'Playfair Display',serif;font-size:22px;color:#e07070;font-weight:700;}
+    .death-success-text{font-size:15px;color:var(--parchment-dark);font-style:italic;line-height:1.7;}
+    .death-success-next{font-family:'Playfair Display',serif;font-size:26px;color:var(--gold);font-weight:900;}
+    .death-success-label{font-size:10px;letter-spacing:.3em;text-transform:uppercase;color:var(--gold);opacity:.5;}
+    .btn-death-close{padding:12px;background:var(--gold);color:var(--ink);border:none;font-family:'Playfair Display',serif;font-size:13px;font-weight:700;letter-spacing:.1em;cursor:pointer;text-transform:uppercase;transition:all .2s;}
+    .btn-death-close:hover{background:var(--gold-light);}
+
+    /* Admin */
+    .admin-panel{margin-top:40px;border-top:1px solid rgba(201,168,76,.1);padding-top:20px;display:none;width:100%;}
+    .admin-panel.visible{display:block;}
+    .admin-title{font-size:10px;letter-spacing:.3em;text-transform:uppercase;color:var(--gold);opacity:.4;margin-bottom:16px;text-align:center;}
+    .btn-randomize{width:100%;padding:14px;background:rgba(201,168,76,.1);border:1px solid rgba(201,168,76,.4);color:var(--gold);font-family:'Playfair Display',serif;font-size:14px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;cursor:pointer;transition:all .2s;margin-bottom:8px;}
+    .btn-randomize:hover{background:rgba(201,168,76,.2);}
+    .randomize-status{font-size:12px;color:var(--gold);opacity:.7;text-align:center;font-style:italic;min-height:18px;margin-bottom:20px;}
+    .log-entry{font-size:12px;color:var(--parchment-dark);opacity:.6;padding:4px 0;border-bottom:1px solid rgba(255,255,255,.04);display:flex;justify-content:space-between;gap:12px;}
+    .log-time{opacity:.5;white-space:nowrap;font-size:11px;}
+    .log-name{font-style:italic;}
+    .log-method{color:var(--gold);opacity:.6;}
+    .kill-entry{font-size:12px;color:var(--parchment-dark);padding:6px 0;border-bottom:1px solid rgba(255,255,255,.04);display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center;}
+    .kill-killer{color:#e07070;}
+    .kill-arrow{opacity:.4;}
+    .kill-victim{color:var(--parchment-dark);}
+    .kill-detail{opacity:.5;font-style:italic;font-size:11px;width:100%;}
+    .kill-time{opacity:.4;font-size:11px;margin-left:auto;}
+    .btn-reset{margin-top:16px;width:100%;background:none;border:1px solid rgba(139,26,26,.4);color:rgba(139,26,26,.6);font-family:'Crimson Text',serif;font-size:12px;letter-spacing:.2em;text-transform:uppercase;padding:8px;cursor:pointer;transition:all .2s;}
+    .btn-reset:hover{border-color:var(--crimson);color:var(--crimson);}
+
+    .sync-dot{position:fixed;top:14px;right:14px;width:7px;height:7px;border-radius:50%;background:#2ecc71;box-shadow:0 0 6px #2ecc71;z-index:100;animation:syncPulse 2s ease infinite;}
+    @keyframes syncPulse{0%,100%{opacity:1}50%{opacity:.4}}
   </style>
-
 </head>
 <body>
 
 <div class="loading-overlay" id="loading">
   <div class="loading-dot"></div><div class="loading-dot"></div><div class="loading-dot"></div>
 </div>
-
 <div class="sync-dot" title="Sincronizado"></div>
 
 <!-- Overlay muerte confirmada -->
-
 <div class="death-success-overlay" id="death-success-panel">
   <div class="death-success-card">
     <div class="death-success-icon">💀</div>
-    <div class="death-success-title">¡Muerte confirmada!</div>
+    <div class="death-success-title">¡Eliminación confirmada!</div>
     <p class="death-success-text">Has eliminado a <strong id="death-success-name"></strong>.<br>Tu nuevo objetivo es:</p>
     <div>
       <div class="death-success-label">Nuevo objetivo</div>
@@ -594,113 +641,151 @@
   </div>
 </div>
 
-<div class="container">
-  <div class="card">
+<div class="container"><div class="card">
 
-```
-<!-- PANTALLA 1: INICIO -->
-<div id="screen-select">
-  <p class="eyebrow">2026</p>
-  <h1 class="title">Desastre del 8A</h1>
-  <p class="subtitle">El cumpleaños de Tom</p>
-  <div class="divider"><div class="divider-line"></div><span class="divider-icon">🔍</span><div class="divider-line"></div></div>
-  <p class="intro">
-    Ha habido una amenaza de que en esta finca algo terrible va a pasar hoy,
-    los invitados han recibido unas directrices:<br><br>
-    <strong>"Ser el último en pie."</strong>
-  </p>
-  <p class="list-label">¿Quién eres tú?</p>
-  <div class="participants-grid" id="participants-list"></div>
-</div>
-
-<!-- PANTALLA 2: CÓDIGO -->
-<div class="code-panel" id="screen-code">
-  <p class="code-message" id="code-message"></p>
-  <div class="code-input-wrap">
-    <input type="password" class="code-input" id="code-input" maxlength="4" placeholder="····" inputmode="numeric" />
-    <button class="btn-confirm" onclick="checkCode()">Entrar</button>
-  </div>
-  <p class="error-msg" id="error-msg">Código incorrecto. Intento registrado.</p>
-  <button class="btn-back" onclick="goBack()">← Volver</button>
-</div>
-
-<!-- PANTALLA 3: PERFIL -->
-<div class="success-screen" id="screen-success">
-
-  <button class="btn-back-home" onclick="goBackFromSuccess()">← Volver al inicio</button>
-
-  <p class="eyebrow" style="margin-bottom:4px">2026</p>
-  <h1 class="success-name" id="success-name"></h1>
-  <p class="subtitle">El cumpleaños de Tom</p>
-
-  <div class="divider" style="width:100%">
-    <div class="divider-line"></div><span class="divider-icon">🔍</span><div class="divider-line"></div>
+  <!-- PANTALLA 1: INICIO -->
+  <div id="screen-select">
+    <p class="eyebrow">2026</p>
+    <h1 class="title">Desastre del 8A</h1>
+    <p class="subtitle">El cumpleaños de Tom</p>
+    <div class="divider"><div class="divider-line"></div><span class="divider-icon">🔍</span><div class="divider-line"></div></div>
+    <p class="intro">
+      Ha habido una amenaza de que en esta finca algo terrible va a pasar hoy,
+      los invitados han recibido unas directrices:<br><br>
+      <strong>"Ser el último en pie."</strong>
+    </p>
+    <p class="list-label">¿Quién eres tú?</p>
+    <div class="participants-grid" id="participants-list"></div>
   </div>
 
-  <div class="game-explanation">
-    <p class="game-text">Durante todo el día tendrás un <strong>objetivo</strong> al cual lo tendrás que matar en un <strong>sitio determinado</strong> con un <strong>arma determinada</strong>, asignados aleatoriamente.</p>
-    <p class="game-text">Cuando lo mates, deberás mostrarle tu objeto y lugar para confirmar que la muerte es válida. En ese entonces pondrás el código de la persona para tener su objetivo.</p>
-    <div class="game-warning">
-      <p><strong>"Asesina con cuidado, si alguien te descubre, tú también morirás, esa persona deberá adivinar tus tres objetivos."</strong></p>
+  <!-- PANTALLA 2: CÓDIGO -->
+  <div class="code-panel" id="screen-code">
+    <p class="code-message" id="code-message"></p>
+    <div class="code-input-wrap">
+      <input type="password" class="code-input" id="code-input" maxlength="4" placeholder="····" inputmode="numeric" />
+      <button class="btn-confirm" onclick="checkCode()">Entrar</button>
     </div>
+    <p class="error-msg" id="error-msg">Código incorrecto.</p>
+    <button class="btn-back" onclick="goBack()">← Volver</button>
   </div>
 
-  <!-- Misión activa -->
-  <div class="mission-card" id="mission-card">
-    <div class="mission-card-header">Tu misión</div>
-    <div class="mission-pending" id="mission-pending">El juego aún no ha comenzado.<br>El organizador activará las misiones en breve.</div>
-    <div class="mission-rows" id="mission-rows" style="display:none">
-      <div class="mission-row">
-        <div class="mission-icon">🎯</div>
-        <div><div class="mission-label">Objetivo</div><div class="mission-value" id="mission-objetivo">—</div></div>
-      </div>
-      <div class="mission-row">
-        <div class="mission-icon">🔪</div>
-        <div><div class="mission-label">Arma</div><div class="mission-value" id="mission-arma">—</div></div>
-      </div>
-      <div class="mission-row">
-        <div class="mission-icon">📍</div>
-        <div><div class="mission-label">Lugar</div><div class="mission-value" id="mission-lugar">—</div></div>
+  <!-- PANTALLA 3: PERFIL -->
+  <div class="success-screen" id="screen-success">
+
+    <button class="btn-back-home" onclick="goBackFromSuccess()">← Volver al inicio</button>
+
+    <p class="eyebrow" style="margin-bottom:4px">2026</p>
+    <h1 class="success-name" id="success-name"></h1>
+    <p class="subtitle">El cumpleaños de Tom</p>
+    <div class="divider" style="width:100%"><div class="divider-line"></div><span class="divider-icon">🔍</span><div class="divider-line"></div></div>
+
+    <div class="game-explanation">
+      <p class="game-text">Durante todo el día tendrás un <strong>objetivo</strong> al cual lo tendrás que matar en un <strong>sitio determinado</strong> con un <strong>arma determinada</strong>, asignados aleatoriamente.</p>
+      <p class="game-text">Cuando lo mates, deberás mostrarle tu objeto y lugar para confirmar que la muerte es válida. En ese entonces pondrás el código de la persona para tener su objetivo.</p>
+      <p class="game-text">Asesina con cuidado, si alguien te descubre, tú también morirás. Esa persona deberá adivinar tus tres objetivos.</p>
+    </div>
+
+    <!-- Misión -->
+    <div class="mission-card" id="mission-card">
+      <div class="mission-card-header">Tu misión</div>
+      <div class="mission-pending" id="mission-pending">El juego aún no ha comenzado.<br>El organizador activará las misiones en breve.</div>
+      <div class="mission-rows" id="mission-rows" style="display:none">
+        <div class="mission-row">
+          <div class="mission-icon">🎯</div>
+          <div><div class="mission-label">Objetivo</div><div class="mission-value" id="mission-objetivo">—</div></div>
+        </div>
+        <div class="mission-row">
+          <div class="mission-icon">🔪</div>
+          <div><div class="mission-label">Arma</div><div class="mission-value" id="mission-arma">—</div></div>
+        </div>
+        <div class="mission-row">
+          <div class="mission-icon">📍</div>
+          <div><div class="mission-label">Lugar</div><div class="mission-value" id="mission-lugar">—</div></div>
+        </div>
       </div>
     </div>
-  </div>
 
-  <!-- Botón confirmar muerte -->
-  <button class="btn-death" id="btn-confirm-death" onclick="toggleDeathPanel()">💀 Confirmar muerte</button>
-
-  <!-- Panel código víctima -->
-  <div class="death-panel" id="death-panel">
-    <p class="death-title">Confirmar eliminación</p>
-    <p class="death-message">Pide a tu víctima su código personal e introdúcelo para confirmar la muerte.</p>
-    <div class="death-input-wrap">
-      <input type="password" class="death-input code-input" id="death-input" maxlength="4" placeholder="····" inputmode="numeric" />
-      <button class="btn-death-confirm" onclick="checkDeathCode()">Confirmar</button>
+    <!-- Aviso eliminado -->
+    <div class="dead-notice" id="dead-notice">
+      Has sido eliminado. Solo puedes consultar tu historial.
     </div>
-    <p class="death-error error-msg" id="death-error"></p>
-    <button class="btn-cancel" onclick="toggleDeathPanel()">← Cancelar</button>
+
+    <!-- Zona de acciones (oculta si eliminado) -->
+    <div id="action-zone" style="width:100%;display:flex;flex-direction:column;gap:8px;">
+
+      <!-- Botón muerte -->
+      <button class="btn-death" id="btn-confirm-death" onclick="toggleDeathPanel()">💀 Confirmar muerte</button>
+
+      <!-- Panel confirmar muerte -->
+      <div class="death-panel" id="death-panel">
+        <p class="panel-title">Confirmar eliminación</p>
+        <p class="panel-message">Pide a tu víctima su código personal e introdúcelo para confirmar la muerte.</p>
+        <div class="death-input-wrap">
+          <input type="password" class="death-input" id="death-input" maxlength="4" placeholder="····" inputmode="numeric" />
+          <button class="btn-death-confirm" onclick="checkDeathCode()">Confirmar</button>
+        </div>
+        <p class="death-error" id="death-error"></p>
+        <button class="btn-cancel" onclick="toggleDeathPanel()">← Cancelar</button>
+      </div>
+
+      <!-- Botón detective -->
+      <button class="btn-detective" id="btn-detective" onclick="toggleDetectivePanel()">🔍 Detective — pillar a alguien</button>
+
+      <!-- Panel detective -->
+      <div class="detective-panel" id="detective-panel">
+        <p class="panel-title" style="color:var(--red-dim)">Acusación de detective</p>
+        <p class="panel-message">Selecciona al asesino, el arma, el lugar y la víctima. Si aciertas los tres, heredas el objetivo de la víctima. Si fallas, eres eliminado.</p>
+        <div class="det-select-wrap">
+          <div class="det-field">
+            <span class="det-label">Asesino</span>
+            <select class="det-select" id="det-asesino"><option value="">— Selecciona —</option></select>
+          </div>
+          <div class="det-field">
+            <span class="det-label">Arma</span>
+            <select class="det-select" id="det-arma"><option value="">— Selecciona —</option></select>
+          </div>
+          <div class="det-field">
+            <span class="det-label">Lugar</span>
+            <select class="det-select" id="det-lugar"><option value="">— Selecciona —</option></select>
+          </div>
+          <div class="det-field">
+            <span class="det-label">Víctima</span>
+            <select class="det-select" id="det-victima"><option value="">— Selecciona —</option></select>
+          </div>
+        </div>
+        <p class="detective-error" id="detective-error"></p>
+        <p class="detective-guess-result" id="detective-guess-result"></p>
+        <!-- Código víctima (aparece si acertó) -->
+        <div class="detective-code-wrap" id="detective-code-wrap" style="display:none">
+          <input type="password" class="death-input" id="detective-code-input" maxlength="4" placeholder="····" inputmode="numeric" />
+          <button class="btn-death-confirm" onclick="checkDetectiveCode()">Confirmar</button>
+        </div>
+        <button class="btn-det-submit" onclick="submitDetective()">Acusar</button>
+        <button class="btn-cancel" onclick="toggleDetectivePanel()">← Cancelar</button>
+      </div>
+
+    </div>
+
+    <!-- Historial -->
+    <div class="history-section" id="history-section" style="display:none">
+      <p class="history-title">Víctimas anteriores</p>
+      <div id="history-list"></div>
+    </div>
+
+    <!-- Admin -->
+    <div class="admin-panel" id="admin-panel">
+      <p class="admin-title">✦ Panel de control ✦</p>
+      <button class="btn-randomize" onclick="randomizeMissions()">🎲 Randomizar misiones</button>
+      <p class="randomize-status" id="randomize-status"></p>
+      <p class="admin-title" style="margin-bottom:8px">Registro de muertes</p>
+      <div id="kills-list" style="margin-bottom:20px"></div>
+      <p class="admin-title" style="margin-bottom:8px">Registro de accesos</p>
+      <div id="log-list"></div>
+      <button class="btn-reset" onclick="resetGame()">⚠ Resetear todos los datos</button>
+    </div>
+
   </div>
 
-  <!-- Historial de víctimas -->
-  <div class="history-section" id="history-section" style="display:none">
-    <p class="history-title">Víctimas anteriores</p>
-    <div id="history-list"></div>
-  </div>
-
-  <!-- Admin — solo Javi Sanjuán -->
-  <div class="admin-panel" id="admin-panel">
-    <p class="admin-title">✦ Panel de control ✦</p>
-    <button class="btn-randomize" onclick="randomizeMissions()">🎲 Randomizar misiones</button>
-    <p class="randomize-status" id="randomize-status"></p>
-    <p class="admin-title">Registro de accesos</p>
-    <div id="log-list"></div>
-    <button class="btn-reset" onclick="resetGame()">⚠ Resetear todos los datos</button>
-  </div>
-
-</div>
-```
-
-  </div>
-</div>
-
+</div></div>
 </body>
 </html>
