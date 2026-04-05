@@ -18,33 +18,62 @@
     const app = initializeApp(firebaseConfig);
     const db  = getDatabase(app);
 
-    const SECRET_CODE = '7184';
-    const ADMIN_NAME  = 'Javi Sanjuán';
+    const ADMIN_NAME = 'Javi Sanjuán';
 
-    const PARTICIPANTS = [
-      'Adrián','Arturo','Asier','Carmen','Carles','Caye','Emma','Guille','Hugo',
-      'Javi Pérez','Javi Sanjuán','Jimena','Jorge','Lucas','Marco','Marcos',
-      'Maria','Naiara','Nico','Sergi','Sergio','Sergio Blanca','Sofia','Tati','Tom','Xavi'
-    ];
+    // Códigos personales — también usados para entrar al perfil por segunda vez
+    const PLAYER_CODES = {
+      'Adrián':       '1111',
+      'Arturo':       '6767',
+      'Asier':        '3434',
+      'Carmen':       '7777',
+      'Carles':       '6464',
+      'Caye':         '0000',
+      'Emma':         '3333',
+      'Guille':       '0931',
+      'Hugo':         '1818',
+      'Javi Pérez':   '1308',
+      'Javi Sanjuán': '7184',
+      'Jimena':       '1515',
+      'Jorge':        '2727',
+      'Lucas':        '6969',
+      'Marco':        '1717',
+      'Marcos':       '1423',
+      'Maria':        '2205',
+      'Naiara':       '2121',
+      'Nico':         '1212',
+      'Sergi':        '1414',
+      'Sergio':       '1003',
+      'Sergio Blanca':'2222',
+      'Sofia':        '5555',
+      'Tati':         '0909',
+      'Tom':          '1616',
+      'Xavi':         '9999',
+    };
+
+    const PARTICIPANTS = Object.keys(PLAYER_CODES);
 
     const OBJETOS = [
       'Tenedor','Botella','Papel de baño','Plato','Vaso',
       'Piedra','Boli','Foto de Tom de pequeño','Tu propia zapatilla','Silla'
     ];
-
     const LUGARES = [
       'Detrás de la barra','Sala principal','Baño','Debajo de la carpa',
       'Barbacoa','Escaleras','Terraza arriba','Fuera (dentro de la valla)','Parking','Porche'
     ];
 
     // ── ESTADO ───────────────────────────────────────────────────
-    let claimed   = {};
-    let missions  = {};
+    let claimed      = {};
+    let missions     = {};
+    let eliminated   = {};
     let currentPlayer = null;
     let adminVisible  = false;
+    let confirmingDeath = false;
 
     function sanitizeKey(name) {
       return name.replace(/[.#$\/\[\] ]/g, '_');
+    }
+    function keyToName(key) {
+      return PARTICIPANTS.find(n => sanitizeKey(n) === key) || key;
     }
 
     // ── FIREBASE LISTENERS ───────────────────────────────────────
@@ -53,13 +82,14 @@
       renderParticipants();
       document.getElementById('loading').classList.add('hidden');
     });
-
     onValue(ref(db, 'missions'), snap => {
       missions = snap.val() || {};
-      // Si el jugador actual ya está en pantalla, actualizar su misión
       if (currentPlayer) renderMission(currentPlayer);
     });
-
+    onValue(ref(db, 'eliminated'), snap => {
+      eliminated = snap.val() || {};
+      if (currentPlayer) renderMission(currentPlayer);
+    });
     onValue(ref(db, 'log'), snap => {
       const data = snap.val();
       renderLog(data ? Object.values(data).reverse() : []);
@@ -72,15 +102,17 @@
       list.innerHTML = '';
       PARTICIPANTS.forEach(name => {
         const taken = !!claimed[sanitizeKey(name)];
-        const btn = document.createElement('button');
-        btn.className = 'participant-btn' + (taken ? ' taken' : '');
-        btn.innerHTML = taken
-          ? `<span>${name}</span><span class="lock-icon">🔒</span>`
-          : `<span>${name}</span>`;
+        const dead  = !!eliminated[sanitizeKey(name)];
+        const btn   = document.createElement('button');
+        btn.className = 'participant-btn' + (taken ? ' taken' : '') + (dead ? ' dead' : '');
+        btn.innerHTML = dead
+          ? `<span>${name}</span><span class="lock-icon">💀</span>`
+          : taken
+            ? `<span>${name}</span><span class="lock-icon">🔒</span>`
+            : `<span>${name}</span>`;
         btn.onclick = () => selectParticipant(name);
         list.appendChild(btn);
       });
-      // Centrar última fila si son 2 (26 participantes → 2 sobran)
       if (PARTICIPANTS.length % 3 === 2) {
         const spacer = document.createElement('div');
         spacer.className = 'grid-spacer';
@@ -95,7 +127,7 @@
       if (claimed[sanitizeKey(name)]) {
         document.getElementById('screen-select').style.display = 'none';
         document.getElementById('code-message').innerHTML =
-          `<strong style="color:var(--gold)">${name}</strong> ya está identificado.<br>Introduce el código secreto para acceder.`;
+          `<strong style="color:var(--gold)">${name}</strong> ya está identificado.<br>Introduce tu código personal para acceder.`;
         document.getElementById('screen-code').classList.add('visible');
         setTimeout(() => document.getElementById('code-input').focus(), 100);
       } else {
@@ -103,12 +135,13 @@
       }
     }
 
-    // ── CÓDIGO ───────────────────────────────────────────────────
+    // ── CÓDIGO DE ACCESO ─────────────────────────────────────────
     window.checkCode = function() {
       const val   = document.getElementById('code-input').value;
       const input = document.getElementById('code-input');
       const err   = document.getElementById('error-msg');
-      if (val === SECRET_CODE) {
+      const expected = PLAYER_CODES[currentPlayer];
+      if (val === expected) {
         err.classList.remove('visible');
         grantAccess(currentPlayer, 'Código verificado');
       } else {
@@ -121,8 +154,9 @@
     };
 
     document.addEventListener('keydown', e => {
-      if (e.key === 'Enter' && document.getElementById('screen-code').classList.contains('visible')) {
-        window.checkCode();
+      if (e.key === 'Enter') {
+        if (document.getElementById('screen-code').classList.contains('visible')) window.checkCode();
+        if (document.getElementById('death-panel').classList.contains('visible')) window.checkDeathCode();
       }
     });
 
@@ -140,82 +174,183 @@
       adminVisible = false;
       document.getElementById('screen-select').style.display = '';
       currentPlayer = null;
+      // Cerrar panel de muerte si estaba abierto
+      document.getElementById('death-panel').classList.remove('visible');
+      confirmingDeath = false;
     };
 
     // ── ACCESO CONCEDIDO ─────────────────────────────────────────
     async function grantAccess(name, method) {
       await update(ref(db, 'claimed'), { [sanitizeKey(name)]: true });
       writeLog(name, method);
-
       document.getElementById('screen-select').style.display = 'none';
       document.getElementById('screen-code').classList.remove('visible');
+      document.getElementById('code-input').value = '';
       document.getElementById('success-name').textContent = name;
       renderMission(name);
       document.getElementById('screen-success').classList.add('visible');
-
       if (name === ADMIN_NAME) {
         adminVisible = true;
         document.getElementById('admin-panel').classList.add('visible');
       }
     }
 
-    // ── RENDER MISIÓN DE UN JUGADOR ──────────────────────────────
+    // ── RENDER MISIÓN ────────────────────────────────────────────
     function renderMission(name) {
       const key     = sanitizeKey(name);
       const mission = missions[key];
       const card    = document.getElementById('mission-card');
       const pending = document.getElementById('mission-pending');
       const rows    = document.getElementById('mission-rows');
+      const histSection = document.getElementById('history-section');
+      const deathBtn = document.getElementById('btn-confirm-death');
 
       card.style.display = 'block';
+
       if (mission) {
         pending.style.display = 'none';
         rows.style.display    = 'block';
         document.getElementById('mission-objetivo').textContent = mission.objetivo;
         document.getElementById('mission-arma').textContent     = mission.arma;
         document.getElementById('mission-lugar').textContent    = mission.lugar;
+        deathBtn.style.display = 'block';
+
+        // Historial de víctimas anteriores
+        const history = mission.history || [];
+        if (history.length > 0) {
+          histSection.style.display = 'block';
+          document.getElementById('history-list').innerHTML = history.map(h => `
+            <div class="history-entry">
+              <span class="history-victim">💀 ${h.victim}</span>
+              <span class="history-sub">${h.arma} · ${h.lugar}</span>
+            </div>`).join('');
+        } else {
+          histSection.style.display = 'none';
+        }
       } else {
         pending.style.display = 'block';
         rows.style.display    = 'none';
+        deathBtn.style.display = 'none';
+        histSection.style.display = 'none';
       }
     }
+
+    // ── CONFIRMAR MUERTE ─────────────────────────────────────────
+    window.toggleDeathPanel = function() {
+      const panel = document.getElementById('death-panel');
+      confirmingDeath = !confirmingDeath;
+      panel.classList.toggle('visible', confirmingDeath);
+      if (confirmingDeath) {
+        document.getElementById('death-input').value = '';
+        document.getElementById('death-error').classList.remove('visible');
+        setTimeout(() => document.getElementById('death-input').focus(), 100);
+      }
+    };
+
+    window.checkDeathCode = function() {
+      const val   = document.getElementById('death-input').value;
+      const input = document.getElementById('death-input');
+      const err   = document.getElementById('death-error');
+
+      // Buscar a qué persona corresponde este código
+      const victim = Object.keys(PLAYER_CODES).find(n => PLAYER_CODES[n] === val);
+
+      // Verificar que la víctima es el objetivo actual del jugador
+      const myKey     = sanitizeKey(currentPlayer);
+      const myMission = missions[myKey];
+
+      if (!victim) {
+        input.classList.add('error');
+        err.textContent = 'Código incorrecto.';
+        err.classList.add('visible');
+        setTimeout(() => input.classList.remove('error'), 600);
+        input.value = '';
+        return;
+      }
+
+      if (!myMission || myMission.objetivo !== victim) {
+        input.classList.add('error');
+        err.textContent = `${victim} no es tu objetivo actual.`;
+        err.classList.add('visible');
+        setTimeout(() => input.classList.remove('error'), 600);
+        input.value = '';
+        return;
+      }
+
+      // ✅ Muerte válida
+      confirmDeath(currentPlayer, victim);
+    };
+
+    async function confirmDeath(killer, victim) {
+      const killerKey = sanitizeKey(killer);
+      const victimKey = sanitizeKey(victim);
+      const killerMission = missions[killerKey];
+      const victimMission = missions[victimKey];
+
+      // Historial del asesino: añadir víctima
+      const prevHistory = killerMission.history || [];
+      const newHistEntry = {
+        victim: victim,
+        arma:   killerMission.arma,
+        lugar:  killerMission.lugar,
+      };
+
+      // Nuevo objetivo = el objetivo que tenía la víctima
+      const newObjetivo = victimMission ? victimMission.objetivo : null;
+      const newArma     = victimMission ? victimMission.arma : killerMission.arma;
+      const newLugar    = victimMission ? victimMission.lugar : killerMission.lugar;
+
+      // Actualizar misión del asesino
+      await update(ref(db, `missions/${killerKey}`), {
+        objetivo: newObjetivo || '— Sin objetivo —',
+        arma:     newArma,
+        lugar:    newLugar,
+        history:  [...prevHistory, newHistEntry],
+      });
+
+      // Marcar víctima como eliminada
+      await update(ref(db, 'eliminated'), { [victimKey]: true });
+
+      // Log
+      writeLog(`${killer} eliminó a ${victim}`, 'Muerte confirmada');
+
+      // Cerrar panel y actualizar vista
+      document.getElementById('death-panel').classList.remove('visible');
+      document.getElementById('death-input').value = '';
+      confirmingDeath = false;
+
+      // Mostrar mensaje de éxito
+      document.getElementById('death-success-name').textContent = victim;
+      document.getElementById('death-success-next').textContent = newObjetivo || '— Sin objetivo —';
+      document.getElementById('death-success-panel').classList.add('visible');
+    }
+
+    window.closeDethSuccess = function() {
+      document.getElementById('death-success-panel').classList.remove('visible');
+    };
 
     // ── LOG ──────────────────────────────────────────────────────
     function writeLog(name, method) {
       const time = new Date().toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
       push(ref(db, 'log'), { name, method, time });
     }
-
     function renderLog(entries) {
-      const container = document.getElementById('log-list');
-      if (!container) return;
-      container.innerHTML = entries.length
-        ? entries.map(e => `
-            <div class="log-entry">
-              <span class="log-name">${e.name}</span>
-              <span class="log-method">${e.method}</span>
-              <span class="log-time">${e.time}</span>
-            </div>`).join('')
+      const c = document.getElementById('log-list');
+      if (!c) return;
+      c.innerHTML = entries.length
+        ? entries.map(e => `<div class="log-entry"><span class="log-name">${e.name}</span><span class="log-method">${e.method}</span><span class="log-time">${e.time}</span></div>`).join('')
         : '<p style="font-size:12px;opacity:0.4;text-align:center;font-style:italic;">Sin accesos registrados</p>';
     }
 
     // ── ADMIN ────────────────────────────────────────────────────
-    window.toggleAdmin = function() {
-      adminVisible = !adminVisible;
-      document.getElementById('admin-panel').classList.toggle('visible', adminVisible);
-    };
-
     window.resetGame = function() {
-      if (confirm('¿Resetear todos los accesos y misiones? Esto borrará todos los datos.')) {
+      if (confirm('¿Resetear todos los datos? Esto borrará accesos, misiones y muertes.')) {
         set(ref(db, '/'), null);
       }
     };
 
-    // ── RANDOMIZAR MISIONES ──────────────────────────────────────
     window.randomizeMissions = function() {
-      if (!confirm('¿Asignar misiones aleatorias a todos los participantes? Esto sobreescribirá las anteriores.')) return;
-
-      // Barajar funciones auxiliares
+      if (!confirm('¿Asignar misiones aleatorias? Esto sobreescribirá las anteriores.')) return;
       function shuffle(arr) {
         const a = [...arr];
         for (let i = a.length - 1; i > 0; i--) {
@@ -224,36 +359,25 @@
         }
         return a;
       }
-
       const n = PARTICIPANTS.length;
-
-      // Objetivos: cadena circular aleatoria — cada persona mata a la siguiente
-      // Así nadie se mata a sí mismo y no se repiten
-      const shuffledPlayers = shuffle([...PARTICIPANTS]);
-      const objetivos = {};
-      shuffledPlayers.forEach((name, i) => {
-        objetivos[sanitizeKey(name)] = shuffledPlayers[(i + 1) % n];
-      });
-
-      // Armas y lugares: repartir aleatoriamente (con repetición si hay más jugadores que items)
-      const shuffledArmas   = shuffle([...OBJETOS]);
-      const shuffledLugares = shuffle([...LUGARES]);
-
+      const shuffledPlayers  = shuffle([...PARTICIPANTS]);
+      const shuffledArmas    = shuffle([...OBJETOS]);
+      const shuffledLugares  = shuffle([...LUGARES]);
       const newMissions = {};
-      PARTICIPANTS.forEach((name, i) => {
-        const key = sanitizeKey(name);
-        newMissions[key] = {
-          objetivo: objetivos[key],
+      shuffledPlayers.forEach((name, i) => {
+        newMissions[sanitizeKey(name)] = {
+          objetivo: shuffledPlayers[(i + 1) % n],
           arma:     shuffledArmas[i % shuffledArmas.length],
           lugar:    shuffledLugares[i % shuffledLugares.length],
+          history:  [],
         };
       });
-
-      set(ref(db, 'missions'), newMissions)
-        .then(() => {
-          document.getElementById('randomize-status').textContent = '✦ Misiones asignadas correctamente';
-          setTimeout(() => document.getElementById('randomize-status').textContent = '', 3000);
-        });
+      set(ref(db, 'missions'), newMissions).then(() => {
+        // También resetear eliminados al randomizar
+        set(ref(db, 'eliminated'), null);
+        document.getElementById('randomize-status').textContent = '✦ Misiones asignadas correctamente';
+        setTimeout(() => document.getElementById('randomize-status').textContent = '', 3000);
+      });
     };
   </script>
 
@@ -267,24 +391,17 @@
       --parchment-dark: #d4b896;
       --ink: #1a1008;
     }
-
     * { margin: 0; padding: 0; box-sizing: border-box; }
-
     body {
       background-color: var(--darker);
       font-family: 'Crimson Text', serif;
       color: var(--parchment);
       min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      overflow-x: hidden;
-      position: relative;
+      display: flex; align-items: center; justify-content: center;
+      overflow-x: hidden; position: relative;
     }
-
     body::before {
-      content: '';
-      position: fixed; inset: 0;
+      content: ''; position: fixed; inset: 0;
       background:
         radial-gradient(ellipse at 20% 50%, rgba(139,26,26,0.15) 0%, transparent 60%),
         radial-gradient(ellipse at 80% 20%, rgba(201,168,76,0.08) 0%, transparent 50%),
@@ -292,17 +409,13 @@
         repeating-linear-gradient(90deg, transparent, transparent 60px, rgba(201,168,76,0.03) 60px, rgba(201,168,76,0.03) 61px);
       pointer-events: none; z-index: 0;
     }
-
     body::after {
-      content: '';
-      position: fixed; top: -200px; left: 50%;
-      transform: translateX(-50%);
-      width: 600px; height: 600px;
+      content: ''; position: fixed; top: -200px; left: 50%;
+      transform: translateX(-50%); width: 600px; height: 600px;
       background: radial-gradient(ellipse, rgba(201,168,76,0.12) 0%, transparent 70%);
       animation: flicker 3s ease-in-out infinite alternate;
       pointer-events: none; z-index: 0;
     }
-
     @keyframes flicker {
       0%   { opacity: 0.6; transform: translateX(-50%) scale(1); }
       25%  { opacity: 1;   transform: translateX(-50%) scale(1.05); }
@@ -311,245 +424,149 @@
       100% { opacity: 0.5; transform: translateX(-50%) scale(1); }
     }
 
-    .container {
-      position: relative; z-index: 1;
-      width: 100%; max-width: 560px; padding: 20px;
-    }
+    .container { position: relative; z-index: 1; width: 100%; max-width: 560px; padding: 20px; }
 
     .card {
       background: linear-gradient(160deg, #1a1208 0%, #0f0c06 50%, #150e07 100%);
-      border: 1px solid rgba(201,168,76,0.3);
-      border-radius: 2px;
-      padding: 44px 36px;
+      border: 1px solid rgba(201,168,76,0.3); border-radius: 2px; padding: 44px 36px;
       box-shadow: 0 0 60px rgba(0,0,0,0.9), 0 0 120px rgba(0,0,0,0.6),
         inset 0 1px 0 rgba(201,168,76,0.15), inset 0 -1px 0 rgba(201,168,76,0.05);
-      animation: cardReveal 1s ease forwards;
-      opacity: 0; transform: translateY(20px);
+      animation: cardReveal 1s ease forwards; opacity: 0; transform: translateY(20px);
     }
-
     @keyframes cardReveal { to { opacity: 1; transform: translateY(0); } }
 
-    /* ── HEADER PRIMERA PANTALLA ── */
-    .eyebrow {
-      text-align: center; letter-spacing: 0.35em; font-size: 10px;
-      color: var(--gold); text-transform: uppercase; margin-bottom: 6px; opacity: 0.7;
-    }
-    .title {
-      font-family: 'Playfair Display', serif; font-size: 36px; font-weight: 900;
-      text-align: center; color: var(--gold); line-height: 1.1;
-      text-shadow: 0 0 40px rgba(201,168,76,0.4); letter-spacing: -0.01em;
-    }
-    .subtitle {
-      font-family: 'Playfair Display', serif; font-style: italic; font-size: 15px;
-      text-align: center; color: var(--parchment-dark); margin-top: 6px; letter-spacing: 0.05em;
-    }
-
-    .divider {
-      display: flex; align-items: center; gap: 12px; margin: 22px 0;
-    }
-    .divider-line {
-      flex: 1; height: 1px;
-      background: linear-gradient(90deg, transparent, rgba(201,168,76,0.4), transparent);
-    }
+    .eyebrow { text-align: center; letter-spacing: 0.35em; font-size: 10px; color: var(--gold); text-transform: uppercase; margin-bottom: 6px; opacity: 0.7; }
+    .title { font-family: 'Playfair Display', serif; font-size: 36px; font-weight: 900; text-align: center; color: var(--gold); line-height: 1.1; text-shadow: 0 0 40px rgba(201,168,76,0.4); letter-spacing: -0.01em; }
+    .subtitle { font-family: 'Playfair Display', serif; font-style: italic; font-size: 15px; text-align: center; color: var(--parchment-dark); margin-top: 6px; letter-spacing: 0.05em; }
+    .divider { display: flex; align-items: center; gap: 12px; margin: 22px 0; }
+    .divider-line { flex: 1; height: 1px; background: linear-gradient(90deg, transparent, rgba(201,168,76,0.4), transparent); }
     .divider-icon { font-size: 16px; }
 
-    /* ── INTRO ── */
-    .intro {
-      font-size: 15px; line-height: 1.75; color: var(--parchment-dark);
-      text-align: center; font-style: italic; margin-bottom: 28px;
-    }
+    .intro { font-size: 15px; line-height: 1.75; color: var(--parchment-dark); text-align: center; font-style: italic; margin-bottom: 28px; }
     .intro strong { color: var(--parchment); font-style: normal; letter-spacing: 0.05em; }
 
-    /* ── PARTICIPANTS GRID ── */
-    .list-label {
-      font-size: 11px; letter-spacing: 0.25em; text-transform: uppercase;
-      color: var(--gold); opacity: 0.6; margin-bottom: 12px;
-    }
-    .participants-grid {
-      display: grid; grid-template-columns: repeat(3, 1fr);
-      gap: 7px; margin-bottom: 28px;
-    }
+    .list-label { font-size: 11px; letter-spacing: 0.25em; text-transform: uppercase; color: var(--gold); opacity: 0.6; margin-bottom: 12px; }
+    .participants-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin-bottom: 28px; }
     .grid-spacer { visibility: hidden; pointer-events: none; }
-
     .participant-btn {
-      padding: 11px 8px;
-      background: rgba(201,168,76,0.05);
-      border: 1px solid rgba(201,168,76,0.18);
+      padding: 11px 8px; background: rgba(201,168,76,0.05); border: 1px solid rgba(201,168,76,0.18);
       color: var(--parchment); font-family: 'Crimson Text', serif; font-size: 15px;
       text-align: center; cursor: pointer; transition: all 0.2s ease;
       display: flex; flex-direction: column; align-items: center; justify-content: center;
       gap: 4px; min-height: 52px; line-height: 1.2;
     }
-    .participant-btn:hover:not(.taken) {
-      background: rgba(201,168,76,0.12); border-color: rgba(201,168,76,0.6);
-      color: var(--gold-light); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.4);
-    }
+    .participant-btn:hover:not(.taken):not(.dead) { background: rgba(201,168,76,0.12); border-color: rgba(201,168,76,0.6); color: var(--gold-light); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
     .participant-btn.taken { opacity: 0.3; color: var(--parchment-dark); }
+    .participant-btn.dead  { opacity: 0.2; color: var(--parchment-dark); text-decoration: line-through; }
     .lock-icon { font-size: 10px; display: block; }
 
-    /* ── LOADING ── */
-    .loading-overlay {
-      position: fixed; inset: 0; background: var(--darker);
-      display: flex; align-items: center; justify-content: center;
-      z-index: 999; transition: opacity 0.5s ease;
-    }
+    .loading-overlay { position: fixed; inset: 0; background: var(--darker); display: flex; align-items: center; justify-content: center; z-index: 999; transition: opacity 0.5s ease; }
     .loading-overlay.hidden { opacity: 0; pointer-events: none; }
-    .loading-dot {
-      width: 8px; height: 8px; background: var(--gold); border-radius: 50%;
-      animation: dotPulse 1.2s ease infinite; margin: 0 4px;
-    }
+    .loading-dot { width: 8px; height: 8px; background: var(--gold); border-radius: 50%; animation: dotPulse 1.2s ease infinite; margin: 0 4px; }
     .loading-dot:nth-child(2) { animation-delay: 0.2s; }
     .loading-dot:nth-child(3) { animation-delay: 0.4s; }
-    @keyframes dotPulse {
-      0%,100% { opacity: 0.2; transform: scale(0.8); }
-      50%      { opacity: 1;   transform: scale(1.2); }
-    }
+    @keyframes dotPulse { 0%,100% { opacity: 0.2; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1.2); } }
 
-    /* ── CODE PANEL ── */
     .code-panel { display: none; flex-direction: column; gap: 16px; animation: fadeIn 0.4s ease; }
     .code-panel.visible { display: flex; }
-    @keyframes fadeIn {
-      from { opacity: 0; transform: translateY(8px); }
-      to   { opacity: 1; transform: translateY(0); }
-    }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
     .code-message { font-size: 14px; line-height: 1.7; color: var(--parchment-dark); text-align: center; font-style: italic; }
     .code-input-wrap { display: flex; gap: 10px; }
-    .code-input {
-      flex: 1; background: rgba(0,0,0,0.5); border: 1px solid rgba(201,168,76,0.3);
-      color: var(--gold-light); font-family: 'Playfair Display', serif; font-size: 22px;
-      letter-spacing: 0.4em; text-align: center; padding: 12px; outline: none; transition: border-color 0.2s;
-    }
+    .code-input { flex: 1; background: rgba(0,0,0,0.5); border: 1px solid rgba(201,168,76,0.3); color: var(--gold-light); font-family: 'Playfair Display', serif; font-size: 22px; letter-spacing: 0.4em; text-align: center; padding: 12px; outline: none; transition: border-color 0.2s; }
     .code-input:focus { border-color: rgba(201,168,76,0.8); box-shadow: 0 0 20px rgba(201,168,76,0.1); }
     .code-input.error { border-color: var(--crimson); animation: shake 0.4s ease; }
-    @keyframes shake {
-      0%,100% { transform: translateX(0); } 20%,60% { transform: translateX(-6px); } 40%,80% { transform: translateX(6px); }
-    }
-    .btn-confirm {
-      padding: 12px 20px; background: var(--gold); color: var(--ink); border: none;
-      font-family: 'Playfair Display', serif; font-size: 13px; font-weight: 700;
-      letter-spacing: 0.1em; cursor: pointer; text-transform: uppercase; transition: all 0.2s; white-space: nowrap;
-    }
+    @keyframes shake { 0%,100% { transform: translateX(0); } 20%,60% { transform: translateX(-6px); } 40%,80% { transform: translateX(6px); } }
+    .btn-confirm { padding: 12px 20px; background: var(--gold); color: var(--ink); border: none; font-family: 'Playfair Display', serif; font-size: 13px; font-weight: 700; letter-spacing: 0.1em; cursor: pointer; text-transform: uppercase; transition: all 0.2s; white-space: nowrap; }
     .btn-confirm:hover { background: var(--gold-light); box-shadow: 0 0 20px rgba(201,168,76,0.3); }
-    .btn-back {
-      background: none; border: 1px solid rgba(201,168,76,0.2); color: var(--parchment-dark);
-      font-family: 'Crimson Text', serif; font-size: 13px; letter-spacing: 0.15em;
-      text-transform: uppercase; cursor: pointer; padding: 8px; transition: all 0.2s;
-    }
+    .btn-back { background: none; border: 1px solid rgba(201,168,76,0.2); color: var(--parchment-dark); font-family: 'Crimson Text', serif; font-size: 13px; letter-spacing: 0.15em; text-transform: uppercase; cursor: pointer; padding: 8px; transition: all 0.2s; }
     .btn-back:hover { border-color: rgba(201,168,76,0.5); color: var(--parchment); }
     .error-msg { color: var(--crimson); font-size: 13px; text-align: center; display: none; font-style: italic; }
     .error-msg.visible { display: block; }
 
     /* ── SUCCESS SCREEN ── */
-    .success-screen {
-      display: none; flex-direction: column; align-items: center;
-      gap: 20px; animation: fadeIn 0.6s ease; text-align: center;
-    }
+    .success-screen { display: none; flex-direction: column; align-items: center; gap: 20px; animation: fadeIn 0.6s ease; text-align: center; }
     .success-screen.visible { display: flex; }
-
-    .btn-back-home {
-      align-self: flex-start; background: none; border: none; color: var(--gold);
-      opacity: 0.5; font-family: 'Crimson Text', serif; font-size: 14px;
-      letter-spacing: 0.15em; cursor: pointer; padding: 0; transition: opacity 0.2s;
-      display: flex; align-items: center; gap: 6px;
-    }
+    .btn-back-home { align-self: flex-start; background: none; border: none; color: var(--gold); opacity: 0.5; font-family: 'Crimson Text', serif; font-size: 14px; letter-spacing: 0.15em; cursor: pointer; padding: 0; transition: opacity 0.2s; display: flex; align-items: center; gap: 6px; }
     .btn-back-home:hover { opacity: 1; }
+    .success-name { font-family: 'Playfair Display', serif; font-size: 38px; font-weight: 900; color: var(--gold); text-shadow: 0 0 40px rgba(201,168,76,0.4); letter-spacing: -0.01em; line-height: 1.1; }
 
-    /* Nombre como título grande */
-    .success-name {
-      font-family: 'Playfair Display', serif; font-size: 38px; font-weight: 900;
-      color: var(--gold); text-shadow: 0 0 40px rgba(201,168,76,0.4);
-      letter-spacing: -0.01em; line-height: 1.1;
-    }
-
-    /* Explicación */
     .game-explanation { display: flex; flex-direction: column; gap: 16px; text-align: left; width: 100%; }
     .game-text { font-size: 15px; line-height: 1.75; color: var(--parchment-dark); font-style: italic; }
     .game-text strong { color: var(--parchment); font-style: normal; }
-    .game-warning {
-      border: 1px solid rgba(201,168,76,0.3); padding: 18px 20px;
-      background: rgba(201,168,76,0.04); text-align: center;
-    }
-    .game-warning p {
-      font-family: 'Playfair Display', serif; font-size: 15px;
-      color: var(--parchment); line-height: 1.6; font-style: italic;
-    }
+    .game-warning { border: 1px solid rgba(201,168,76,0.3); padding: 18px 20px; background: rgba(201,168,76,0.04); text-align: center; }
+    .game-warning p { font-family: 'Playfair Display', serif; font-size: 15px; color: var(--parchment); line-height: 1.6; font-style: italic; }
 
-    /* Tarjeta de misión */
-    .mission-card {
-      width: 100%; border: 1px solid rgba(201,168,76,0.35);
-      background: rgba(201,168,76,0.04);
-      display: none;
-    }
-    .mission-card-header {
-      padding: 12px 20px; border-bottom: 1px solid rgba(201,168,76,0.15);
-      font-size: 10px; letter-spacing: 0.3em; text-transform: uppercase;
-      color: var(--gold); opacity: 0.6;
-    }
-    .mission-pending {
-      padding: 16px 20px; font-style: italic; font-size: 14px;
-      color: var(--parchment-dark); text-align: center; line-height: 1.6;
-    }
+    /* ── MISSION CARD ── */
+    .mission-card { width: 100%; border: 1px solid rgba(201,168,76,0.35); background: rgba(201,168,76,0.04); display: none; }
+    .mission-card-header { padding: 12px 20px; border-bottom: 1px solid rgba(201,168,76,0.15); font-size: 10px; letter-spacing: 0.3em; text-transform: uppercase; color: var(--gold); opacity: 0.6; }
+    .mission-pending { padding: 16px 20px; font-style: italic; font-size: 14px; color: var(--parchment-dark); text-align: center; line-height: 1.6; }
     .mission-rows { padding: 8px 0; }
-    .mission-row {
-      display: flex; align-items: center; gap: 16px;
-      padding: 14px 20px; border-bottom: 1px solid rgba(201,168,76,0.08);
-    }
+    .mission-row { display: flex; align-items: center; gap: 16px; padding: 14px 20px; border-bottom: 1px solid rgba(201,168,76,0.08); }
     .mission-row:last-child { border-bottom: none; }
     .mission-icon { font-size: 20px; flex-shrink: 0; width: 28px; text-align: center; }
-    .mission-label {
-      font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase;
-      color: var(--gold); opacity: 0.5; margin-bottom: 3px;
-    }
-    .mission-value {
-      font-family: 'Playfair Display', serif; font-size: 18px;
-      color: var(--parchment); font-weight: 700;
-    }
+    .mission-label { font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--gold); opacity: 0.5; margin-bottom: 3px; }
+    .mission-value { font-family: 'Playfair Display', serif; font-size: 18px; color: var(--parchment); font-weight: 700; }
 
-    /* ── ADMIN PANEL ── */
-    .admin-panel {
-      margin-top: 40px; border-top: 1px solid rgba(201,168,76,0.1);
-      padding-top: 20px; display: none; width: 100%;
-    }
-    .admin-panel.visible { display: block; }
-    .admin-title {
-      font-size: 10px; letter-spacing: 0.3em; text-transform: uppercase;
-      color: var(--gold); opacity: 0.4; margin-bottom: 16px; text-align: center;
-    }
-    .btn-randomize {
-      width: 100%; padding: 14px; background: rgba(201,168,76,0.1);
-      border: 1px solid rgba(201,168,76,0.4); color: var(--gold);
+    /* ── BOTÓN CONFIRMAR MUERTE ── */
+    .btn-death {
+      width: 100%; padding: 14px; background: rgba(139,26,26,0.15);
+      border: 1px solid rgba(139,26,26,0.5); color: #e07070;
       font-family: 'Playfair Display', serif; font-size: 14px; font-weight: 700;
       letter-spacing: 0.1em; text-transform: uppercase; cursor: pointer;
-      transition: all 0.2s; margin-bottom: 8px;
+      transition: all 0.2s; display: none;
     }
-    .btn-randomize:hover { background: rgba(201,168,76,0.2); box-shadow: 0 0 20px rgba(201,168,76,0.15); }
-    .randomize-status {
-      font-size: 12px; color: var(--gold); opacity: 0.7; text-align: center;
-      font-style: italic; min-height: 18px; margin-bottom: 20px;
-    }
-    .log-entry {
-      font-size: 12px; color: var(--parchment-dark); opacity: 0.6;
-      padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.04);
-      display: flex; justify-content: space-between; gap: 12px;
-    }
-    .log-time   { opacity: 0.5; white-space: nowrap; font-size: 11px; }
-    .log-name   { font-style: italic; }
+    .btn-death:hover { background: rgba(139,26,26,0.3); border-color: var(--crimson); }
+
+    /* ── PANEL CONFIRMAR MUERTE ── */
+    .death-panel { display: none; flex-direction: column; gap: 14px; width: 100%; animation: fadeIn 0.3s ease; border: 1px solid rgba(139,26,26,0.4); padding: 20px; background: rgba(139,26,26,0.06); }
+    .death-panel.visible { display: flex; }
+    .death-title { font-size: 11px; letter-spacing: 0.25em; text-transform: uppercase; color: #e07070; opacity: 0.8; text-align: center; }
+    .death-message { font-size: 14px; color: var(--parchment-dark); font-style: italic; text-align: center; line-height: 1.6; }
+    .death-input-wrap { display: flex; gap: 10px; }
+    .death-input { flex: 1; background: rgba(0,0,0,0.5); border: 1px solid rgba(139,26,26,0.4); color: #e07070; font-family: 'Playfair Display', serif; font-size: 22px; letter-spacing: 0.4em; text-align: center; padding: 12px; outline: none; transition: border-color 0.2s; }
+    .death-input:focus { border-color: rgba(139,26,26,0.8); }
+    .death-input.error { animation: shake 0.4s ease; }
+    .death-error { color: var(--crimson); font-size: 13px; text-align: center; display: none; font-style: italic; }
+    .death-error.visible { display: block; }
+    .btn-death-confirm { padding: 12px 20px; background: var(--crimson); color: var(--parchment); border: none; font-family: 'Playfair Display', serif; font-size: 13px; font-weight: 700; letter-spacing: 0.1em; cursor: pointer; text-transform: uppercase; transition: all 0.2s; white-space: nowrap; }
+    .btn-death-confirm:hover { background: #a02020; }
+    .btn-cancel { background: none; border: 1px solid rgba(201,168,76,0.2); color: var(--parchment-dark); font-family: 'Crimson Text', serif; font-size: 13px; letter-spacing: 0.15em; text-transform: uppercase; cursor: pointer; padding: 8px; transition: all 0.2s; }
+    .btn-cancel:hover { border-color: rgba(201,168,76,0.5); color: var(--parchment); }
+
+    /* ── MUERTE CONFIRMADA (overlay) ── */
+    .death-success-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 500; align-items: center; justify-content: center; padding: 20px; }
+    .death-success-overlay.visible { display: flex; }
+    .death-success-card { background: linear-gradient(160deg, #1a0808 0%, #0f0606 100%); border: 1px solid rgba(139,26,26,0.6); padding: 40px 32px; max-width: 400px; width: 100%; text-align: center; display: flex; flex-direction: column; gap: 20px; animation: fadeIn 0.4s ease; }
+    .death-success-icon { font-size: 52px; }
+    .death-success-title { font-family: 'Playfair Display', serif; font-size: 22px; color: #e07070; font-weight: 700; }
+    .death-success-text { font-size: 15px; color: var(--parchment-dark); font-style: italic; line-height: 1.7; }
+    .death-success-next { font-family: 'Playfair Display', serif; font-size: 26px; color: var(--gold); font-weight: 900; }
+    .death-success-label { font-size: 10px; letter-spacing: 0.3em; text-transform: uppercase; color: var(--gold); opacity: 0.5; }
+    .btn-death-close { padding: 12px; background: var(--gold); color: var(--ink); border: none; font-family: 'Playfair Display', serif; font-size: 13px; font-weight: 700; letter-spacing: 0.1em; cursor: pointer; text-transform: uppercase; transition: all 0.2s; }
+    .btn-death-close:hover { background: var(--gold-light); }
+
+    /* ── HISTORIAL ── */
+    .history-section { width: 100%; }
+    .history-title { font-size: 10px; letter-spacing: 0.25em; text-transform: uppercase; color: var(--gold); opacity: 0.3; margin-bottom: 8px; text-align: center; }
+    .history-entry { padding: 10px 16px; border: 1px solid rgba(201,168,76,0.08); background: rgba(0,0,0,0.2); margin-bottom: 6px; opacity: 0.35; filter: blur(0.3px); }
+    .history-victim { font-family: 'Playfair Display', serif; font-size: 15px; color: var(--parchment-dark); display: block; margin-bottom: 3px; }
+    .history-sub { font-size: 12px; color: var(--parchment-dark); opacity: 0.6; font-style: italic; }
+
+    /* ── ADMIN ── */
+    .admin-panel { margin-top: 40px; border-top: 1px solid rgba(201,168,76,0.1); padding-top: 20px; display: none; width: 100%; }
+    .admin-panel.visible { display: block; }
+    .admin-title { font-size: 10px; letter-spacing: 0.3em; text-transform: uppercase; color: var(--gold); opacity: 0.4; margin-bottom: 16px; text-align: center; }
+    .btn-randomize { width: 100%; padding: 14px; background: rgba(201,168,76,0.1); border: 1px solid rgba(201,168,76,0.4); color: var(--gold); font-family: 'Playfair Display', serif; font-size: 14px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; cursor: pointer; transition: all 0.2s; margin-bottom: 8px; }
+    .btn-randomize:hover { background: rgba(201,168,76,0.2); }
+    .randomize-status { font-size: 12px; color: var(--gold); opacity: 0.7; text-align: center; font-style: italic; min-height: 18px; margin-bottom: 20px; }
+    .log-entry { font-size: 12px; color: var(--parchment-dark); opacity: 0.6; padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.04); display: flex; justify-content: space-between; gap: 12px; }
+    .log-time { opacity: 0.5; white-space: nowrap; font-size: 11px; }
+    .log-name { font-style: italic; }
     .log-method { color: var(--gold); opacity: 0.6; }
-    .btn-reset {
-      margin-top: 16px; width: 100%; background: none;
-      border: 1px solid rgba(139,26,26,0.4); color: rgba(139,26,26,0.6);
-      font-family: 'Crimson Text', serif; font-size: 12px; letter-spacing: 0.2em;
-      text-transform: uppercase; padding: 8px; cursor: pointer; transition: all 0.2s;
-    }
+    .btn-reset { margin-top: 16px; width: 100%; background: none; border: 1px solid rgba(139,26,26,0.4); color: rgba(139,26,26,0.6); font-family: 'Crimson Text', serif; font-size: 12px; letter-spacing: 0.2em; text-transform: uppercase; padding: 8px; cursor: pointer; transition: all 0.2s; }
     .btn-reset:hover { border-color: var(--crimson); color: var(--crimson); }
 
-    /* ── SYNC DOT ── */
-    .sync-dot {
-      position: fixed; top: 14px; right: 14px;
-      width: 7px; height: 7px; border-radius: 50%;
-      background: #2ecc71; box-shadow: 0 0 6px #2ecc71;
-      z-index: 100; animation: syncPulse 2s ease infinite;
-    }
+    .sync-dot { position: fixed; top: 14px; right: 14px; width: 7px; height: 7px; border-radius: 50%; background: #2ecc71; box-shadow: 0 0 6px #2ecc71; z-index: 100; animation: syncPulse 2s ease infinite; }
     @keyframes syncPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
   </style>
 
@@ -557,27 +574,36 @@
 <body>
 
 <div class="loading-overlay" id="loading">
-  <div class="loading-dot"></div>
-  <div class="loading-dot"></div>
-  <div class="loading-dot"></div>
+  <div class="loading-dot"></div><div class="loading-dot"></div><div class="loading-dot"></div>
 </div>
 
 <div class="sync-dot" title="Sincronizado"></div>
+
+<!-- Overlay muerte confirmada -->
+
+<div class="death-success-overlay" id="death-success-panel">
+  <div class="death-success-card">
+    <div class="death-success-icon">💀</div>
+    <div class="death-success-title">¡Muerte confirmada!</div>
+    <p class="death-success-text">Has eliminado a <strong id="death-success-name"></strong>.<br>Tu nuevo objetivo es:</p>
+    <div>
+      <div class="death-success-label">Nuevo objetivo</div>
+      <div class="death-success-next" id="death-success-next"></div>
+    </div>
+    <button class="btn-death-close" onclick="closeDethSuccess()">Entendido</button>
+  </div>
+</div>
 
 <div class="container">
   <div class="card">
 
 ```
-<!-- ── PANTALLA 1: INICIO ── -->
+<!-- PANTALLA 1: INICIO -->
 <div id="screen-select">
   <p class="eyebrow">2026</p>
   <h1 class="title">Desastre del 8A</h1>
   <p class="subtitle">El cumpleaños de Tom</p>
-  <div class="divider">
-    <div class="divider-line"></div>
-    <span class="divider-icon">🔍</span>
-    <div class="divider-line"></div>
-  </div>
+  <div class="divider"><div class="divider-line"></div><span class="divider-icon">🔍</span><div class="divider-line"></div></div>
   <p class="intro">
     Ha habido una amenaza de que en esta finca algo terrible va a pasar hoy,
     los invitados han recibido unas directrices:<br><br>
@@ -587,7 +613,7 @@
   <div class="participants-grid" id="participants-list"></div>
 </div>
 
-<!-- ── PANTALLA 2: CÓDIGO ── -->
+<!-- PANTALLA 2: CÓDIGO -->
 <div class="code-panel" id="screen-code">
   <p class="code-message" id="code-message"></p>
   <div class="code-input-wrap">
@@ -598,68 +624,66 @@
   <button class="btn-back" onclick="goBack()">← Volver</button>
 </div>
 
-<!-- ── PANTALLA 3: PERFIL DEL JUGADOR ── -->
+<!-- PANTALLA 3: PERFIL -->
 <div class="success-screen" id="screen-success">
 
   <button class="btn-back-home" onclick="goBackFromSuccess()">← Volver al inicio</button>
 
-  <!-- Nombre como título -->
   <p class="eyebrow" style="margin-bottom:4px">2026</p>
   <h1 class="success-name" id="success-name"></h1>
   <p class="subtitle">El cumpleaños de Tom</p>
 
   <div class="divider" style="width:100%">
-    <div class="divider-line"></div>
-    <span class="divider-icon">🔍</span>
-    <div class="divider-line"></div>
+    <div class="divider-line"></div><span class="divider-icon">🔍</span><div class="divider-line"></div>
   </div>
 
-  <!-- Explicación del juego -->
   <div class="game-explanation">
-    <p class="game-text">
-      Durante todo el día tendrás un <strong>objetivo</strong> al cual lo tendrás que matar
-      en un <strong>sitio determinado</strong> con un <strong>arma determinada</strong>,
-      asignados aleatoriamente.
-    </p>
-    <p class="game-text">
-      Cuando lo mates, deberás mostrarle tu objeto y lugar para confirmar que la muerte es válida.
-      En ese entonces pondrás el código de la persona para tener su objetivo.
-    </p>
+    <p class="game-text">Durante todo el día tendrás un <strong>objetivo</strong> al cual lo tendrás que matar en un <strong>sitio determinado</strong> con un <strong>arma determinada</strong>, asignados aleatoriamente.</p>
+    <p class="game-text">Cuando lo mates, deberás mostrarle tu objeto y lugar para confirmar que la muerte es válida. En ese entonces pondrás el código de la persona para tener su objetivo.</p>
     <div class="game-warning">
-      <p><strong>"Asesina con cuidado, si alguien te descubre, tú también morirás,
-      esa persona deberá adivinar tus tres objetivos."</strong></p>
+      <p><strong>"Asesina con cuidado, si alguien te descubre, tú también morirás, esa persona deberá adivinar tus tres objetivos."</strong></p>
     </div>
   </div>
 
-  <!-- Tarjeta de misión -->
+  <!-- Misión activa -->
   <div class="mission-card" id="mission-card">
     <div class="mission-card-header">Tu misión</div>
-    <div class="mission-pending" id="mission-pending">
-      El juego aún no ha comenzado.<br>El organizador activará las misiones en breve.
-    </div>
+    <div class="mission-pending" id="mission-pending">El juego aún no ha comenzado.<br>El organizador activará las misiones en breve.</div>
     <div class="mission-rows" id="mission-rows" style="display:none">
       <div class="mission-row">
         <div class="mission-icon">🎯</div>
-        <div>
-          <div class="mission-label">Objetivo</div>
-          <div class="mission-value" id="mission-objetivo">—</div>
-        </div>
+        <div><div class="mission-label">Objetivo</div><div class="mission-value" id="mission-objetivo">—</div></div>
       </div>
       <div class="mission-row">
         <div class="mission-icon">🔪</div>
-        <div>
-          <div class="mission-label">Arma</div>
-          <div class="mission-value" id="mission-arma">—</div>
-        </div>
+        <div><div class="mission-label">Arma</div><div class="mission-value" id="mission-arma">—</div></div>
       </div>
       <div class="mission-row">
         <div class="mission-icon">📍</div>
-        <div>
-          <div class="mission-label">Lugar</div>
-          <div class="mission-value" id="mission-lugar">—</div>
-        </div>
+        <div><div class="mission-label">Lugar</div><div class="mission-value" id="mission-lugar">—</div></div>
       </div>
     </div>
+  </div>
+
+  <!-- Botón confirmar muerte -->
+  <button class="btn-death" id="btn-confirm-death" onclick="toggleDeathPanel()">💀 Confirmar muerte</button>
+
+  <!-- Panel código víctima -->
+  <div class="death-panel" id="death-panel">
+    <p class="death-title">Confirmar eliminación</p>
+    <p class="death-message">Pide a tu víctima su código personal e introdúcelo para confirmar la muerte.</p>
+    <div class="death-input-wrap">
+      <input type="password" class="death-input code-input" id="death-input" maxlength="4" placeholder="····" inputmode="numeric" />
+      <button class="btn-death-confirm" onclick="checkDeathCode()">Confirmar</button>
+    </div>
+    <p class="death-error error-msg" id="death-error"></p>
+    <button class="btn-cancel" onclick="toggleDeathPanel()">← Cancelar</button>
+  </div>
+
+  <!-- Historial de víctimas -->
+  <div class="history-section" id="history-section" style="display:none">
+    <p class="history-title">Víctimas anteriores</p>
+    <div id="history-list"></div>
   </div>
 
   <!-- Admin — solo Javi Sanjuán -->
