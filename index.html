@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
@@ -177,30 +178,74 @@
       deadNotice.style.display = dead ? 'block' : 'none';
     }
 
-    // ── MISIÓN ───────────────────────────────────────────────────
+    // ── MISIÓN — soporta múltiples objetivos (array 'objetivos') ──
+    // Estructura de misión en Firebase:
+    // { objetivos: [{objetivo, arma, lugar}, ...], history: [...] }
+    // Para compatibilidad, si existe campo 'objetivo' (string) se migra al array.
+
+    function getMission(name) {
+      const raw = missions[sanitizeKey(name)];
+      if (!raw) return null;
+      // Migrar formato antiguo
+      if (raw.objetivo && !raw.objetivos) {
+        return { objetivos: [{ objetivo: raw.objetivo, arma: raw.arma, lugar: raw.lugar }], history: raw.history || [] };
+      }
+      return { objetivos: raw.objetivos || [], history: raw.history || [] };
+    }
+
     function renderMission(name) {
-      const key     = sanitizeKey(name);
-      const mission = missions[key];
-      const card    = document.getElementById('mission-card');
-      const pending = document.getElementById('mission-pending');
-      const rows    = document.getElementById('mission-rows');
+      const mission     = getMission(name);
+      const card        = document.getElementById('mission-card');
+      const pending     = document.getElementById('mission-pending');
+      const container   = document.getElementById('mission-objetivos-container');
       const histSection = document.getElementById('history-section');
-      const btnDeath = document.getElementById('btn-confirm-death');
-      const btnDet   = document.getElementById('btn-detective');
+      const btnDet      = document.getElementById('btn-detective');
 
       card.style.display = 'block';
-      if (mission) {
-        pending.style.display = 'none';
-        rows.style.display    = 'block';
-        document.getElementById('mission-objetivo').textContent = mission.objetivo;
-        document.getElementById('mission-arma').textContent     = mission.arma;
-        document.getElementById('mission-lugar').textContent    = mission.lugar;
-        btnDeath.style.display = 'block';
-        btnDet.style.display   = 'block';
-        const history = mission.history || [];
-        if (history.length > 0) {
+
+      if (mission && mission.objetivos.length > 0) {
+        pending.style.display   = 'none';
+        container.style.display = 'block';
+        btnDet.style.display    = 'block';
+
+        // Renderizar cada objetivo con su propio botón de confirmar muerte
+        container.innerHTML = mission.objetivos.map((obj, idx) => `
+          <div class="objetivo-block" id="obj-block-${idx}">
+            <div class="mission-rows">
+              <div class="mission-row">
+                <div class="mission-icon">🎯</div>
+                <div><div class="mission-label">Objetivo</div><div class="mission-value">${obj.objetivo}</div></div>
+              </div>
+              <div class="mission-row">
+                <div class="mission-icon">🔪</div>
+                <div><div class="mission-label">Arma</div><div class="mission-value">${obj.arma}</div></div>
+              </div>
+              <div class="mission-row">
+                <div class="mission-icon">📍</div>
+                <div><div class="mission-label">Lugar</div><div class="mission-value">${obj.lugar}</div></div>
+              </div>
+            </div>
+            <div class="obj-death-wrap">
+              <button class="btn-death" style="display:block;margin-top:0" onclick="toggleObjDeathPanel(${idx})">💀 Confirmar muerte</button>
+              <div class="death-panel" id="obj-death-panel-${idx}">
+                <p class="panel-title">Confirmar eliminación</p>
+                <p class="panel-message">Pide a <strong>${obj.objetivo}</strong> su código personal.</p>
+                <div class="death-input-wrap">
+                  <input type="password" class="death-input" id="obj-death-input-${idx}" maxlength="4" placeholder="····" inputmode="numeric" />
+                  <button class="btn-death-confirm" onclick="checkObjDeathCode(${idx})">Confirmar</button>
+                </div>
+                <p class="death-error" id="obj-death-error-${idx}"></p>
+                <button class="btn-cancel" onclick="toggleObjDeathPanel(${idx})">← Cancelar</button>
+              </div>
+            </div>
+          </div>
+          ${idx < mission.objetivos.length - 1 ? '<div class="obj-separator"></div>' : ''}
+        `).join('');
+
+        // Historial
+        if (mission.history.length > 0) {
           histSection.style.display = 'block';
-          document.getElementById('history-list').innerHTML = history.map(h =>
+          document.getElementById('history-list').innerHTML = mission.history.map(h =>
             `<div class="history-entry">
               <span class="history-victim">💀 ${h.victim}</span>
               <span class="history-sub">${h.arma} · ${h.lugar}</span>
@@ -209,69 +254,78 @@
           histSection.style.display = 'none';
         }
       } else {
-        pending.style.display = 'block';
-        rows.style.display    = 'none';
-        btnDeath.style.display = 'none';
-        btnDet.style.display   = 'none';
+        pending.style.display   = 'block';
+        container.style.display = 'none';
+        btnDet.style.display    = 'none';
         histSection.style.display = 'none';
       }
     }
 
-    // ── PANEL MUERTE ─────────────────────────────────────────────
-    window.toggleDeathPanel = function() {
-      showingDeath = !showingDeath;
-      showingDetective = false;
-      document.getElementById('death-panel').classList.toggle('visible', showingDeath);
+    // ── PANEL MUERTE POR OBJETIVO ────────────────────────────────
+    window.toggleObjDeathPanel = function(idx) {
+      const panel = document.getElementById(`obj-death-panel-${idx}`);
+      const isVisible = panel.classList.contains('visible');
+      // Cerrar todos
+      document.querySelectorAll('.death-panel').forEach(p => p.classList.remove('visible'));
       document.getElementById('detective-panel').classList.remove('visible');
-      if (showingDeath) {
-        document.getElementById('death-input').value = '';
-        document.getElementById('death-error').classList.remove('visible');
-        setTimeout(() => document.getElementById('death-input').focus(), 100);
+      showingDetective = false;
+      if (!isVisible) {
+        panel.classList.add('visible');
+        document.getElementById(`obj-death-input-${idx}`).focus();
       }
     };
 
-    window.checkDeathCode = function() {
-      const val   = document.getElementById('death-input').value;
-      const input = document.getElementById('death-input');
-      const err   = document.getElementById('death-error');
+    window.checkObjDeathCode = async function(idx) {
+      const input   = document.getElementById(`obj-death-input-${idx}`);
+      const err     = document.getElementById(`obj-death-error-${idx}`);
+      const val     = input.value;
+      const mission = getMission(currentPlayer);
+      if (!mission || !mission.objetivos[idx]) return;
+
+      const obj    = mission.objetivos[idx];
       const victim = PARTICIPANTS.find(n => PLAYER_CODES[n] === val);
-      const myMission = missions[sanitizeKey(currentPlayer)];
-      if (!victim) {
-        triggerError(input, err, 'Código incorrecto.'); return;
-      }
-      if (!myMission || myMission.objetivo !== victim) {
-        triggerError(input, err, `${victim} no es tu objetivo.`); return;
-      }
-      confirmDeath(currentPlayer, victim, myMission.arma, myMission.lugar);
+
+      if (!victim) { triggerError(input, err, 'Código incorrecto.'); return; }
+      if (victim !== obj.objetivo) { triggerError(input, err, `${victim} no es este objetivo.`); return; }
+
+      await executeKill(currentPlayer, idx, victim, obj.arma, obj.lugar);
     };
 
-    async function confirmDeath(killer, victim, arma, lugar) {
-      const killerKey = sanitizeKey(killer);
-      const victimKey = sanitizeKey(victim);
-      const killerMission = missions[killerKey];
-      const victimMission = missions[victimKey];
-      const prevHistory   = killerMission.history || [];
+    async function executeKill(killer, objIdx, victim, arma, lugar) {
+      const killerKey   = sanitizeKey(killer);
+      const victimKey   = sanitizeKey(victim);
+      const rawKiller   = missions[killerKey];
+      const victimMission = getMission(victim);
       const now = new Date();
       const timeStr = now.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'});
       const dateStr = now.toLocaleDateString('es-ES',{day:'2-digit',month:'2-digit'});
 
-      const newObjetivo = victimMission ? victimMission.objetivo : '— Sin objetivo —';
+      // Nuevo objetivo heredado de la víctima (primer objetivo de la víctima)
+      const victimFirstObj = victimMission && victimMission.objetivos.length > 0
+        ? victimMission.objetivos[0]
+        : { objetivo: '— Sin objetivo —', arma: arma, lugar: lugar };
 
-      await update(ref(db,`missions/${killerKey}`), {
-        objetivo: newObjetivo,
-        arma:     victimMission ? victimMission.arma  : killerMission.arma,
-        lugar:    victimMission ? victimMission.lugar : killerMission.lugar,
-        history:  [...prevHistory, { victim, arma, lugar }],
-      });
-      await update(ref(db,'eliminated'), { [victimKey]: true });
-      push(ref(db,'kills'), { killer, victim, arma, lugar, date: dateStr, time: timeStr });
+      // Reconstruir array de objetivos: reemplazar el slot idx con el heredado
+      const currentMission = getMission(killer);
+      const newObjetivos = [...currentMission.objetivos];
+      newObjetivos[objIdx] = {
+        objetivo: victimFirstObj.objetivo,
+        arma:     victimFirstObj.arma,
+        lugar:    victimFirstObj.lugar,
+      };
+
+      const newHistory = [...currentMission.history, { victim, arma, lugar }];
+
+      // Guardar en Firebase en formato nuevo
+      await set(ref(db, `missions/${killerKey}`), { objetivos: newObjetivos, history: newHistory });
+      await update(ref(db, 'eliminated'), { [victimKey]: true });
+      push(ref(db, 'kills'), { killer, victim, arma, lugar, date: dateStr, time: timeStr });
       writeLog(`${killer} eliminó a ${victim}`, '💀 Muerte');
 
-      document.getElementById('death-panel').classList.remove('visible');
-      document.getElementById('death-input').value = '';
-      showingDeath = false;
-      document.getElementById('death-success-name').textContent   = victim;
-      document.getElementById('death-success-next').textContent   = newObjetivo;
+      // Overlay de confirmación
+      document.querySelectorAll('.death-panel').forEach(p => p.classList.remove('visible'));
+      document.getElementById('death-success-name').textContent = victim;
+      document.getElementById('death-success-next').textContent = victimFirstObj.objetivo;
       document.getElementById('death-success-panel').classList.add('visible');
     }
 
@@ -282,27 +336,23 @@
     // ── PANEL DETECTIVE ──────────────────────────────────────────
     window.toggleDetectivePanel = function() {
       showingDetective = !showingDetective;
-      showingDeath = false;
+      document.querySelectorAll('.death-panel').forEach(p => p.classList.remove('visible'));
       document.getElementById('detective-panel').classList.toggle('visible', showingDetective);
-      document.getElementById('death-panel').classList.remove('visible');
       if (showingDetective) {
         populateDetectiveSelects();
         document.getElementById('detective-code-wrap').style.display = 'none';
         document.getElementById('detective-error').classList.remove('visible');
-        document.getElementById('detective-result').classList.remove('visible');
+        document.getElementById('detective-guess-result').classList.remove('visible');
+        document.getElementById('detective-guess-result').style.display = 'none';
       }
     };
 
     function populateDetectiveSelects() {
-      const selAsesino = document.getElementById('det-asesino');
-      const selArma    = document.getElementById('det-arma');
-      const selLugar   = document.getElementById('det-lugar');
-      const selVictima = document.getElementById('det-victima');
-
-      selAsesino.innerHTML = '<option value="">— Selecciona —</option>' + PARTICIPANTS.map(n=>`<option value="${n}">${n}</option>`).join('');
-      selArma.innerHTML    = '<option value="">— Selecciona —</option>' + OBJETOS.map(o=>`<option value="${o}">${o}</option>`).join('');
-      selLugar.innerHTML   = '<option value="">— Selecciona —</option>' + LUGARES.map(l=>`<option value="${l}">${l}</option>`).join('');
-      selVictima.innerHTML = '<option value="">— Selecciona —</option>' + PARTICIPANTS.map(n=>`<option value="${n}">${n}</option>`).join('');
+      const alive = PARTICIPANTS.filter(n => !eliminated[sanitizeKey(n)]);
+      document.getElementById('det-asesino').innerHTML = '<option value="">— Selecciona —</option>' + alive.map(n=>`<option value="${n}">${n}</option>`).join('');
+      document.getElementById('det-arma').innerHTML    = '<option value="">— Selecciona —</option>' + OBJETOS.map(o=>`<option value="${o}">${o}</option>`).join('');
+      document.getElementById('det-lugar').innerHTML   = '<option value="">— Selecciona —</option>' + LUGARES.map(l=>`<option value="${l}">${l}</option>`).join('');
+      document.getElementById('det-victima').innerHTML = '<option value="">— Selecciona —</option>' + alive.map(n=>`<option value="${n}">${n}</option>`).join('');
     }
 
     window.submitDetective = function() {
@@ -320,23 +370,28 @@
         err.textContent = 'No puedes acusarte a ti mismo.';
         err.classList.add('visible'); return;
       }
+      if (victima === currentPlayer) {
+        err.textContent = 'No puedes ser la víctima.';
+        err.classList.add('visible'); return;
+      }
 
       err.classList.remove('visible');
-      const mission = missions[sanitizeKey(asesino)];
-      const correct = mission &&
-        mission.objetivo === victima &&
-        mission.arma     === arma    &&
-        mission.lugar    === lugar;
+      const asesinMission = getMission(asesino);
+      // Comprobar si alguno de los objetivos del asesino coincide
+      const correct = asesinMission && asesinMission.objetivos.some(o =>
+        o.objetivo === victima && o.arma === arma && o.lugar === lugar
+      );
 
       if (correct) {
-        // Correcto — pedir código de la víctima para heredar objetivo
-        document.getElementById('detective-guess-result').textContent = `¡Correcto! ${asesino} iba a matar a ${victima} con ${arma} en ${lugar}.`;
+        const guessEl = document.getElementById('detective-guess-result');
+        guessEl.textContent = `¡Correcto! ${asesino} iba a matar a ${victima} con ${arma} en ${lugar}.`;
+        guessEl.style.display = 'block';
         document.getElementById('detective-code-wrap').style.display = 'flex';
         document.getElementById('detective-code-input').value = '';
+        document.getElementById('btn-det-submit').style.display = 'none';
         setTimeout(() => document.getElementById('detective-code-input').focus(), 100);
       } else {
-        // Incorrecto — el detective muere
-        err.textContent = `Incorrecto. Tu acusación era errónea... y ahora tú también morirás.`;
+        err.textContent = 'Incorrecto. Tu acusación era errónea... y ahora tú también morirás.';
         err.classList.add('visible');
         setTimeout(async () => {
           await update(ref(db,'eliminated'), { [sanitizeKey(currentPlayer)]: true });
@@ -348,43 +403,51 @@
     };
 
     window.checkDetectiveCode = function() {
-      const val    = document.getElementById('detective-code-input').value;
-      const input  = document.getElementById('detective-code-input');
-      const err    = document.getElementById('detective-error');
+      const val     = document.getElementById('detective-code-input').value;
+      const input   = document.getElementById('detective-code-input');
+      const err     = document.getElementById('detective-error');
       const victima = document.getElementById('det-victima').value;
       const asesino = document.getElementById('det-asesino').value;
+      const arma    = document.getElementById('det-arma').value;
+      const lugar   = document.getElementById('det-lugar').value;
 
       if (val !== PLAYER_CODES[victima]) {
         triggerError(input, err, 'Código de la víctima incorrecto.'); return;
       }
 
-      // Heredar objetivo de la víctima
-      const detKey      = sanitizeKey(currentPlayer);
-      const victimKey   = sanitizeKey(victima);
-      const asesinKey   = sanitizeKey(asesino);
-      const myMission   = missions[detKey];
-      const victimMission = missions[victimKey];
+      const detKey        = sanitizeKey(currentPlayer);
+      const victimKey     = sanitizeKey(victima);
+      const asesinKey     = sanitizeKey(asesino);
+      const myMission     = getMission(currentPlayer);
+      const victimMission = getMission(victima);
       const now = new Date();
       const timeStr = now.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'});
       const dateStr = now.toLocaleDateString('es-ES',{day:'2-digit',month:'2-digit'});
 
-      const newObjetivo = victimMission ? victimMission.objetivo : '— Sin objetivo —';
-      const prevHistory = myMission ? (myMission.history || []) : [];
+      // El detective MANTIENE sus objetivos actuales Y AÑADE el primer objetivo de la víctima
+      const extraObj = victimMission && victimMission.objetivos.length > 0
+        ? victimMission.objetivos[0]
+        : { objetivo: '— Sin objetivo —', arma: arma, lugar: lugar };
 
-      update(ref(db,`missions/${detKey}`), {
-        objetivo: newObjetivo,
-        arma:     victimMission ? victimMission.arma  : (myMission ? myMission.arma : '—'),
-        lugar:    victimMission ? victimMission.lugar : (myMission ? myMission.lugar : '—'),
-        history:  [...prevHistory, { victim: victima, arma: '(detective)', lugar: '(detective)' }],
-      });
-      update(ref(db,'eliminated'), { [victimKey]: true, [asesinKey]: true });
-      push(ref(db,'kills'), { killer: currentPlayer + ' (detective)', victim: asesino + ' + ' + victima, arma: '(detective)', lugar: '(detective)', date: dateStr, time: timeStr });
+      const currentObjetivos = myMission ? myMission.objetivos : [];
+      const newObjetivos = [...currentObjetivos, extraObj];
+      const newHistory   = [...(myMission ? myMission.history : []),
+        { victim: `${victima} (víctima de ${asesino})`, arma: '(detective)', lugar: '(detective)' }
+      ];
+
+      set(ref(db, `missions/${detKey}`), { objetivos: newObjetivos, history: newHistory });
+      update(ref(db, 'eliminated'), { [victimKey]: true, [asesinKey]: true });
+      push(ref(db, 'kills'), { killer: `${currentPlayer} (detective)`, victim: `${asesino} + ${victima}`, arma, lugar, date: dateStr, time: timeStr });
       writeLog(`${currentPlayer} pilló a ${asesino} matando a ${victima}`, '🔍 Detective');
 
       document.getElementById('detective-panel').classList.remove('visible');
       showingDetective = false;
+      document.getElementById('btn-det-submit').style.display = 'block';
+
+      // Overlay — mostrar ambos nuevos objetivos
+      const nextNames = newObjetivos.map(o => o.objetivo).join(' y ');
       document.getElementById('death-success-name').textContent = `${asesino} y ${victima}`;
-      document.getElementById('death-success-next').textContent = newObjetivo;
+      document.getElementById('death-success-next').textContent = nextNames;
       document.getElementById('death-success-panel').classList.add('visible');
     };
 
@@ -441,7 +504,10 @@
       const sl = shuffle([...LUGARES]);
       const nm = {};
       sp.forEach((name,i) => {
-        nm[sanitizeKey(name)] = { objetivo: sp[(i+1)%n], arma: sa[i%sa.length], lugar: sl[i%sl.length], history: [] };
+        nm[sanitizeKey(name)] = {
+          objetivos: [{ objetivo: sp[(i+1)%n], arma: sa[i%sa.length], lugar: sl[i%sl.length] }],
+          history: []
+        };
       });
       set(ref(db,'missions'), nm);
       set(ref(db,'eliminated'), null);
@@ -519,6 +585,11 @@
     .game-explanation{display:flex;flex-direction:column;gap:14px;text-align:left;width:100%;}
     .game-text{font-size:15px;line-height:1.75;color:var(--parchment-dark);font-style:italic;}
     .game-text strong{color:var(--parchment);font-style:normal;}
+
+    .obj-separator { height: 1px; background: rgba(201,168,76,0.2); margin: 4px 0; }
+    .obj-death-wrap { padding: 0 0 8px 0; display: flex; flex-direction: column; gap: 8px; }
+    .objetivo-block { border-bottom: 1px solid rgba(201,168,76,0.1); }
+    .objetivo-block:last-child { border-bottom: none; }
 
     /* Mission card */
     .mission-card{width:100%;border:1px solid rgba(201,168,76,.35);background:rgba(201,168,76,.04);display:none;}
@@ -619,6 +690,7 @@
     .sync-dot{position:fixed;top:14px;right:14px;width:7px;height:7px;border-radius:50%;background:#2ecc71;box-shadow:0 0 6px #2ecc71;z-index:100;animation:syncPulse 2s ease infinite;}
     @keyframes syncPulse{0%,100%{opacity:1}50%{opacity:.4}}
   </style>
+
 </head>
 <body>
 
@@ -628,6 +700,7 @@
 <div class="sync-dot" title="Sincronizado"></div>
 
 <!-- Overlay muerte confirmada -->
+
 <div class="death-success-overlay" id="death-success-panel">
   <div class="death-success-card">
     <div class="death-success-icon">💀</div>
@@ -644,6 +717,7 @@
 <div class="container"><div class="card">
 
   <!-- PANTALLA 1: INICIO -->
+
   <div id="screen-select">
     <p class="eyebrow">2026</p>
     <h1 class="title">Desastre del 8A</h1>
@@ -659,6 +733,7 @@
   </div>
 
   <!-- PANTALLA 2: CÓDIGO -->
+
   <div class="code-panel" id="screen-code">
     <p class="code-message" id="code-message"></p>
     <div class="code-input-wrap">
@@ -670,119 +745,94 @@
   </div>
 
   <!-- PANTALLA 3: PERFIL -->
+
   <div class="success-screen" id="screen-success">
 
-    <button class="btn-back-home" onclick="goBackFromSuccess()">← Volver al inicio</button>
+```
+<button class="btn-back-home" onclick="goBackFromSuccess()">← Volver al inicio</button>
 
-    <p class="eyebrow" style="margin-bottom:4px">2026</p>
-    <h1 class="success-name" id="success-name"></h1>
-    <p class="subtitle">El cumpleaños de Tom</p>
-    <div class="divider" style="width:100%"><div class="divider-line"></div><span class="divider-icon">🔍</span><div class="divider-line"></div></div>
+<p class="eyebrow" style="margin-bottom:4px">2026</p>
+<h1 class="success-name" id="success-name"></h1>
+<p class="subtitle">El cumpleaños de Tom</p>
+<div class="divider" style="width:100%"><div class="divider-line"></div><span class="divider-icon">🔍</span><div class="divider-line"></div></div>
 
-    <div class="game-explanation">
-      <p class="game-text">Durante todo el día tendrás un <strong>objetivo</strong> al cual lo tendrás que matar en un <strong>sitio determinado</strong> con un <strong>arma determinada</strong>, asignados aleatoriamente.</p>
-      <p class="game-text">Cuando lo mates, deberás mostrarle tu objeto y lugar para confirmar que la muerte es válida. En ese entonces pondrás el código de la persona para tener su objetivo.</p>
-      <p class="game-text">Asesina con cuidado, si alguien te descubre, tú también morirás. Esa persona deberá adivinar tus tres objetivos.</p>
-    </div>
+<div class="game-explanation">
+  <p class="game-text">Durante todo el día tendrás un <strong>objetivo</strong> al cual lo tendrás que matar en un <strong>sitio determinado</strong> con un <strong>arma determinada</strong>, asignados aleatoriamente.</p>
+  <p class="game-text">Cuando lo mates, deberás mostrarle tu objeto y lugar para confirmar que la muerte es válida. En ese entonces pondrás el código de la persona para tener su objetivo.</p>
+  <p class="game-text">Asesina con cuidado, si alguien te descubre, tú también morirás. Esa persona deberá adivinar tus tres objetivos.</p>
+</div>
 
-    <!-- Misión -->
-    <div class="mission-card" id="mission-card">
-      <div class="mission-card-header">Tu misión</div>
-      <div class="mission-pending" id="mission-pending">El juego aún no ha comenzado.<br>El organizador activará las misiones en breve.</div>
-      <div class="mission-rows" id="mission-rows" style="display:none">
-        <div class="mission-row">
-          <div class="mission-icon">🎯</div>
-          <div><div class="mission-label">Objetivo</div><div class="mission-value" id="mission-objetivo">—</div></div>
-        </div>
-        <div class="mission-row">
-          <div class="mission-icon">🔪</div>
-          <div><div class="mission-label">Arma</div><div class="mission-value" id="mission-arma">—</div></div>
-        </div>
-        <div class="mission-row">
-          <div class="mission-icon">📍</div>
-          <div><div class="mission-label">Lugar</div><div class="mission-value" id="mission-lugar">—</div></div>
-        </div>
+<!-- Misión -->
+<div class="mission-card" id="mission-card">
+  <div class="mission-card-header">Tu misión</div>
+  <div class="mission-pending" id="mission-pending">El juego aún no ha comenzado.<br>El organizador activará las misiones en breve.</div>
+  <div id="mission-objetivos-container" style="display:none"></div>
+</div>
+
+<!-- Aviso eliminado -->
+<div class="dead-notice" id="dead-notice">
+  Has sido eliminado. Solo puedes consultar tu historial.
+</div>
+
+<!-- Zona de acciones (oculta si eliminado) -->
+<div id="action-zone" style="width:100%;display:flex;flex-direction:column;gap:8px;">
+
+  <!-- Botón detective -->
+  <button class="btn-detective" id="btn-detective" onclick="toggleDetectivePanel()">🔍 Detective — pillar a alguien</button>
+
+  <!-- Panel detective -->
+  <div class="detective-panel" id="detective-panel">
+    <p class="panel-title" style="color:var(--red-dim)">Acusación de detective</p>
+    <p class="panel-message">Selecciona al asesino, el arma, el lugar y la víctima. Si aciertas los tres, heredas el objetivo de la víctima. Si fallas, eres eliminado.</p>
+    <div class="det-select-wrap">
+      <div class="det-field">
+        <span class="det-label">Asesino</span>
+        <select class="det-select" id="det-asesino"><option value="">— Selecciona —</option></select>
+      </div>
+      <div class="det-field">
+        <span class="det-label">Arma</span>
+        <select class="det-select" id="det-arma"><option value="">— Selecciona —</option></select>
+      </div>
+      <div class="det-field">
+        <span class="det-label">Lugar</span>
+        <select class="det-select" id="det-lugar"><option value="">— Selecciona —</option></select>
+      </div>
+      <div class="det-field">
+        <span class="det-label">Víctima</span>
+        <select class="det-select" id="det-victima"><option value="">— Selecciona —</option></select>
       </div>
     </div>
-
-    <!-- Aviso eliminado -->
-    <div class="dead-notice" id="dead-notice">
-      Has sido eliminado. Solo puedes consultar tu historial.
+    <p class="detective-error" id="detective-error"></p>
+    <p class="detective-guess-result" id="detective-guess-result"></p>
+    <!-- Código víctima (aparece si acertó) -->
+    <div class="detective-code-wrap" id="detective-code-wrap" style="display:none">
+      <input type="password" class="death-input" id="detective-code-input" maxlength="4" placeholder="····" inputmode="numeric" />
+      <button class="btn-death-confirm" onclick="checkDetectiveCode()">Confirmar</button>
     </div>
+    <button class="btn-det-submit" onclick="submitDetective()">Acusar</button>
+    <button class="btn-cancel" onclick="toggleDetectivePanel()">← Cancelar</button>
+  </div>
 
-    <!-- Zona de acciones (oculta si eliminado) -->
-    <div id="action-zone" style="width:100%;display:flex;flex-direction:column;gap:8px;">
+</div>
 
-      <!-- Botón muerte -->
-      <button class="btn-death" id="btn-confirm-death" onclick="toggleDeathPanel()">💀 Confirmar muerte</button>
+<!-- Historial -->
+<div class="history-section" id="history-section" style="display:none">
+  <p class="history-title">Víctimas anteriores</p>
+  <div id="history-list"></div>
+</div>
 
-      <!-- Panel confirmar muerte -->
-      <div class="death-panel" id="death-panel">
-        <p class="panel-title">Confirmar eliminación</p>
-        <p class="panel-message">Pide a tu víctima su código personal e introdúcelo para confirmar la muerte.</p>
-        <div class="death-input-wrap">
-          <input type="password" class="death-input" id="death-input" maxlength="4" placeholder="····" inputmode="numeric" />
-          <button class="btn-death-confirm" onclick="checkDeathCode()">Confirmar</button>
-        </div>
-        <p class="death-error" id="death-error"></p>
-        <button class="btn-cancel" onclick="toggleDeathPanel()">← Cancelar</button>
-      </div>
-
-      <!-- Botón detective -->
-      <button class="btn-detective" id="btn-detective" onclick="toggleDetectivePanel()">🔍 Detective — pillar a alguien</button>
-
-      <!-- Panel detective -->
-      <div class="detective-panel" id="detective-panel">
-        <p class="panel-title" style="color:var(--red-dim)">Acusación de detective</p>
-        <p class="panel-message">Selecciona al asesino, el arma, el lugar y la víctima. Si aciertas los tres, heredas el objetivo de la víctima. Si fallas, eres eliminado.</p>
-        <div class="det-select-wrap">
-          <div class="det-field">
-            <span class="det-label">Asesino</span>
-            <select class="det-select" id="det-asesino"><option value="">— Selecciona —</option></select>
-          </div>
-          <div class="det-field">
-            <span class="det-label">Arma</span>
-            <select class="det-select" id="det-arma"><option value="">— Selecciona —</option></select>
-          </div>
-          <div class="det-field">
-            <span class="det-label">Lugar</span>
-            <select class="det-select" id="det-lugar"><option value="">— Selecciona —</option></select>
-          </div>
-          <div class="det-field">
-            <span class="det-label">Víctima</span>
-            <select class="det-select" id="det-victima"><option value="">— Selecciona —</option></select>
-          </div>
-        </div>
-        <p class="detective-error" id="detective-error"></p>
-        <p class="detective-guess-result" id="detective-guess-result"></p>
-        <!-- Código víctima (aparece si acertó) -->
-        <div class="detective-code-wrap" id="detective-code-wrap" style="display:none">
-          <input type="password" class="death-input" id="detective-code-input" maxlength="4" placeholder="····" inputmode="numeric" />
-          <button class="btn-death-confirm" onclick="checkDetectiveCode()">Confirmar</button>
-        </div>
-        <button class="btn-det-submit" onclick="submitDetective()">Acusar</button>
-        <button class="btn-cancel" onclick="toggleDetectivePanel()">← Cancelar</button>
-      </div>
-
-    </div>
-
-    <!-- Historial -->
-    <div class="history-section" id="history-section" style="display:none">
-      <p class="history-title">Víctimas anteriores</p>
-      <div id="history-list"></div>
-    </div>
-
-    <!-- Admin -->
-    <div class="admin-panel" id="admin-panel">
-      <p class="admin-title">✦ Panel de control ✦</p>
-      <button class="btn-randomize" onclick="randomizeMissions()">🎲 Randomizar misiones</button>
-      <p class="randomize-status" id="randomize-status"></p>
-      <p class="admin-title" style="margin-bottom:8px">Registro de muertes</p>
-      <div id="kills-list" style="margin-bottom:20px"></div>
-      <p class="admin-title" style="margin-bottom:8px">Registro de accesos</p>
-      <div id="log-list"></div>
-      <button class="btn-reset" onclick="resetGame()">⚠ Resetear todos los datos</button>
-    </div>
+<!-- Admin -->
+<div class="admin-panel" id="admin-panel">
+  <p class="admin-title">✦ Panel de control ✦</p>
+  <button class="btn-randomize" onclick="randomizeMissions()">🎲 Randomizar misiones</button>
+  <p class="randomize-status" id="randomize-status"></p>
+  <p class="admin-title" style="margin-bottom:8px">Registro de muertes</p>
+  <div id="kills-list" style="margin-bottom:20px"></div>
+  <p class="admin-title" style="margin-bottom:8px">Registro de accesos</p>
+  <div id="log-list"></div>
+  <button class="btn-reset" onclick="resetGame()">⚠ Resetear todos los datos</button>
+</div>
+```
 
   </div>
 
