@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
@@ -6,10 +7,9 @@
   <title>Desastre del 8A</title>
   <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;0,900;1,400&family=Crimson+Text:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet" />
 
-  <!-- Firebase SDK -->
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-    import { getDatabase, ref, onValue, update, push } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+    import { getDatabase, ref, onValue, update, push, set } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
 
     const firebaseConfig = {
       databaseURL: "https://desastre-8a-default-rtdb.europe-west1.firebasedatabase.app/"
@@ -21,60 +21,49 @@
     const SECRET_CODE = '7184';
     const ADMIN_NAME  = 'Javi Sanjuán';
 
-    // Lista alfabética con Adrián y Jimena añadidos
     const PARTICIPANTS = [
-      'Adrián',
-      'Arturo',
-      'Asier',
-      'Carmen',
-      'Carles',
-      'Caye',
-      'Emma',
-      'Guille',
-      'Hugo',
-      'Javi Pérez',
-      'Javi Sanjuán',
-      'Jimena',
-      'Jorge',
-      'Lucas',
-      'Marco',
-      'Marcos',
-      'Maria',
-      'Naiara',
-      'Nico',
-      'Sergi',
-      'Sergio',
-      'Sergio Blanca',
-      'Sofia',
-      'Tati',
-      'Tom',
-      'Xavi',
+      'Adrián','Arturo','Asier','Carmen','Carles','Caye','Emma','Guille','Hugo',
+      'Javi Pérez','Javi Sanjuán','Jimena','Jorge','Lucas','Marco','Marcos',
+      'Maria','Naiara','Nico','Sergi','Sergio','Sergio Blanca','Sofia','Tati','Tom','Xavi'
     ];
-    // 26 participantes → 8 filas de 3 + 1 fila de 2 → centrado con CSS
 
-    let claimed = {};
-    let selectedParticipant = null;
-    let adminVisible = false;
+    const OBJETOS = [
+      'Tenedor','Botella','Papel de baño','Plato','Vaso',
+      'Piedra','Boli','Foto de Tom de pequeño','Tu propia zapatilla','Silla'
+    ];
+
+    const LUGARES = [
+      'Detrás de la barra','Sala principal','Baño','Debajo de la carpa',
+      'Barbacoa','Escaleras','Terraza arriba','Fuera (dentro de la valla)','Parking','Porche'
+    ];
+
+    // ── ESTADO ───────────────────────────────────────────────────
+    let claimed   = {};
+    let missions  = {};
+    let currentPlayer = null;
+    let adminVisible  = false;
+
+    function sanitizeKey(name) {
+      return name.replace(/[.#$\/\[\] ]/g, '_');
+    }
 
     // ── FIREBASE LISTENERS ───────────────────────────────────────
-    const claimedRef = ref(db, 'claimed');
-    onValue(claimedRef, (snapshot) => {
-      claimed = snapshot.val() || {};
+    onValue(ref(db, 'claimed'), snap => {
+      claimed = snap.val() || {};
       renderParticipants();
       document.getElementById('loading').classList.add('hidden');
     });
 
-    const logRef = ref(db, 'log');
-    onValue(logRef, (snapshot) => {
-      const data = snapshot.val();
-      const entries = data ? Object.values(data).reverse() : [];
-      renderLog(entries);
+    onValue(ref(db, 'missions'), snap => {
+      missions = snap.val() || {};
+      // Si el jugador actual ya está en pantalla, actualizar su misión
+      if (currentPlayer) renderMission(currentPlayer);
     });
 
-    // ── SANITIZE KEY ─────────────────────────────────────────────
-    function sanitizeKey(name) {
-      return name.replace(/[.#$\/\[\] ]/g, '_');
-    }
+    onValue(ref(db, 'log'), snap => {
+      const data = snap.val();
+      renderLog(data ? Object.values(data).reverse() : []);
+    });
 
     // ── RENDER PARTICIPANTES ─────────────────────────────────────
     function renderParticipants() {
@@ -91,22 +80,19 @@
         btn.onclick = () => selectParticipant(name);
         list.appendChild(btn);
       });
-      // Si la última fila tiene 2 elementos (26 % 3 == 2), añadir spacer al principio de esa fila
-      const remainder = PARTICIPANTS.length % 3;
-      if (remainder === 2) {
+      // Centrar última fila si son 2 (26 participantes → 2 sobran)
+      if (PARTICIPANTS.length % 3 === 2) {
         const spacer = document.createElement('div');
         spacer.className = 'grid-spacer';
-        // Insertar el spacer antes de los dos últimos botones
-        const buttons = list.querySelectorAll('.participant-btn');
-        list.insertBefore(spacer, buttons[buttons.length - 2]);
+        const btns = list.querySelectorAll('.participant-btn');
+        list.insertBefore(spacer, btns[btns.length - 2]);
       }
     }
 
     // ── SELECCIÓN ────────────────────────────────────────────────
     function selectParticipant(name) {
-      selectedParticipant = name;
-      const key = sanitizeKey(name);
-      if (claimed[key]) {
+      currentPlayer = name;
+      if (claimed[sanitizeKey(name)]) {
         document.getElementById('screen-select').style.display = 'none';
         document.getElementById('code-message').innerHTML =
           `<strong style="color:var(--gold)">${name}</strong> ya está identificado.<br>Introduce el código secreto para acceder.`;
@@ -124,11 +110,11 @@
       const err   = document.getElementById('error-msg');
       if (val === SECRET_CODE) {
         err.classList.remove('visible');
-        grantAccess(selectedParticipant, 'Código verificado');
+        grantAccess(currentPlayer, 'Código verificado');
       } else {
         input.classList.add('error');
         err.classList.add('visible');
-        writeLog(selectedParticipant + ' (intento fallido)', 'Código incorrecto');
+        writeLog(currentPlayer + ' (intento fallido)', 'Código incorrecto');
         setTimeout(() => input.classList.remove('error'), 600);
         input.value = '';
       }
@@ -141,7 +127,7 @@
     });
 
     window.goBack = function() {
-      selectedParticipant = null;
+      currentPlayer = null;
       document.getElementById('screen-code').classList.remove('visible');
       document.getElementById('error-msg').classList.remove('visible');
       document.getElementById('code-input').value = '';
@@ -153,7 +139,7 @@
       document.getElementById('admin-panel').classList.remove('visible');
       adminVisible = false;
       document.getElementById('screen-select').style.display = '';
-      selectedParticipant = null;
+      currentPlayer = null;
     };
 
     // ── ACCESO CONCEDIDO ─────────────────────────────────────────
@@ -164,50 +150,110 @@
       document.getElementById('screen-select').style.display = 'none';
       document.getElementById('screen-code').classList.remove('visible');
       document.getElementById('success-name').textContent = name;
+      renderMission(name);
       document.getElementById('screen-success').classList.add('visible');
 
-      // Si es Javi Sanjuán, mostrar panel admin automáticamente
       if (name === ADMIN_NAME) {
         adminVisible = true;
         document.getElementById('admin-panel').classList.add('visible');
       }
     }
 
+    // ── RENDER MISIÓN DE UN JUGADOR ──────────────────────────────
+    function renderMission(name) {
+      const key     = sanitizeKey(name);
+      const mission = missions[key];
+      const card    = document.getElementById('mission-card');
+      const pending = document.getElementById('mission-pending');
+      const rows    = document.getElementById('mission-rows');
+
+      card.style.display = 'block';
+      if (mission) {
+        pending.style.display = 'none';
+        rows.style.display    = 'block';
+        document.getElementById('mission-objetivo').textContent = mission.objetivo;
+        document.getElementById('mission-arma').textContent     = mission.arma;
+        document.getElementById('mission-lugar').textContent    = mission.lugar;
+      } else {
+        pending.style.display = 'block';
+        rows.style.display    = 'none';
+      }
+    }
+
     // ── LOG ──────────────────────────────────────────────────────
     function writeLog(name, method) {
-      const now = new Date();
-      const time = now.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      const time = new Date().toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
       push(ref(db, 'log'), { name, method, time });
     }
 
     function renderLog(entries) {
       const container = document.getElementById('log-list');
       if (!container) return;
-      if (!entries.length) {
-        container.innerHTML = '<p style="font-size:12px;opacity:0.4;text-align:center;font-style:italic;">Sin accesos registrados</p>';
-        return;
-      }
-      container.innerHTML = entries.map(e =>
-        `<div class="log-entry">
-          <span class="log-name">${e.name}</span>
-          <span class="log-method">${e.method}</span>
-          <span class="log-time">${e.time}</span>
-        </div>`
-      ).join('');
+      container.innerHTML = entries.length
+        ? entries.map(e => `
+            <div class="log-entry">
+              <span class="log-name">${e.name}</span>
+              <span class="log-method">${e.method}</span>
+              <span class="log-time">${e.time}</span>
+            </div>`).join('')
+        : '<p style="font-size:12px;opacity:0.4;text-align:center;font-style:italic;">Sin accesos registrados</p>';
     }
 
     // ── ADMIN ────────────────────────────────────────────────────
     window.toggleAdmin = function() {
       adminVisible = !adminVisible;
-      const panel = document.getElementById('admin-panel');
-      if (adminVisible) panel.classList.add('visible');
-      else panel.classList.remove('visible');
+      document.getElementById('admin-panel').classList.toggle('visible', adminVisible);
     };
 
     window.resetGame = function() {
-      if (confirm('¿Resetear todos los accesos? Esto borrará todos los datos.')) {
-        update(ref(db, '/'), { claimed: null, log: null });
+      if (confirm('¿Resetear todos los accesos y misiones? Esto borrará todos los datos.')) {
+        set(ref(db, '/'), null);
       }
+    };
+
+    // ── RANDOMIZAR MISIONES ──────────────────────────────────────
+    window.randomizeMissions = function() {
+      if (!confirm('¿Asignar misiones aleatorias a todos los participantes? Esto sobreescribirá las anteriores.')) return;
+
+      // Barajar funciones auxiliares
+      function shuffle(arr) {
+        const a = [...arr];
+        for (let i = a.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [a[i], a[j]] = [a[j], a[i]];
+        }
+        return a;
+      }
+
+      const n = PARTICIPANTS.length;
+
+      // Objetivos: cadena circular aleatoria — cada persona mata a la siguiente
+      // Así nadie se mata a sí mismo y no se repiten
+      const shuffledPlayers = shuffle([...PARTICIPANTS]);
+      const objetivos = {};
+      shuffledPlayers.forEach((name, i) => {
+        objetivos[sanitizeKey(name)] = shuffledPlayers[(i + 1) % n];
+      });
+
+      // Armas y lugares: repartir aleatoriamente (con repetición si hay más jugadores que items)
+      const shuffledArmas   = shuffle([...OBJETOS]);
+      const shuffledLugares = shuffle([...LUGARES]);
+
+      const newMissions = {};
+      PARTICIPANTS.forEach((name, i) => {
+        const key = sanitizeKey(name);
+        newMissions[key] = {
+          objetivo: objetivos[key],
+          arma:     shuffledArmas[i % shuffledArmas.length],
+          lugar:    shuffledLugares[i % shuffledLugares.length],
+        };
+      });
+
+      set(ref(db, 'missions'), newMissions)
+        .then(() => {
+          document.getElementById('randomize-status').textContent = '✦ Misiones asignadas correctamente';
+          setTimeout(() => document.getElementById('randomize-status').textContent = '', 3000);
+        });
     };
   </script>
 
@@ -238,28 +284,23 @@
 
     body::before {
       content: '';
-      position: fixed;
-      inset: 0;
+      position: fixed; inset: 0;
       background:
         radial-gradient(ellipse at 20% 50%, rgba(139,26,26,0.15) 0%, transparent 60%),
         radial-gradient(ellipse at 80% 20%, rgba(201,168,76,0.08) 0%, transparent 50%),
         repeating-linear-gradient(0deg, transparent, transparent 60px, rgba(201,168,76,0.03) 60px, rgba(201,168,76,0.03) 61px),
         repeating-linear-gradient(90deg, transparent, transparent 60px, rgba(201,168,76,0.03) 60px, rgba(201,168,76,0.03) 61px);
-      pointer-events: none;
-      z-index: 0;
+      pointer-events: none; z-index: 0;
     }
 
     body::after {
       content: '';
-      position: fixed;
-      top: -200px;
-      left: 50%;
+      position: fixed; top: -200px; left: 50%;
       transform: translateX(-50%);
       width: 600px; height: 600px;
       background: radial-gradient(ellipse, rgba(201,168,76,0.12) 0%, transparent 70%);
       animation: flicker 3s ease-in-out infinite alternate;
-      pointer-events: none;
-      z-index: 0;
+      pointer-events: none; z-index: 0;
     }
 
     @keyframes flicker {
@@ -271,11 +312,8 @@
     }
 
     .container {
-      position: relative;
-      z-index: 1;
-      width: 100%;
-      max-width: 560px;
-      padding: 20px;
+      position: relative; z-index: 1;
+      width: 100%; max-width: 560px; padding: 20px;
     }
 
     .card {
@@ -283,155 +321,82 @@
       border: 1px solid rgba(201,168,76,0.3);
       border-radius: 2px;
       padding: 44px 36px;
-      box-shadow:
-        0 0 60px rgba(0,0,0,0.9),
-        0 0 120px rgba(0,0,0,0.6),
-        inset 0 1px 0 rgba(201,168,76,0.15),
-        inset 0 -1px 0 rgba(201,168,76,0.05);
-      position: relative;
+      box-shadow: 0 0 60px rgba(0,0,0,0.9), 0 0 120px rgba(0,0,0,0.6),
+        inset 0 1px 0 rgba(201,168,76,0.15), inset 0 -1px 0 rgba(201,168,76,0.05);
       animation: cardReveal 1s ease forwards;
-      opacity: 0;
-      transform: translateY(20px);
+      opacity: 0; transform: translateY(20px);
     }
 
-    @keyframes cardReveal {
-      to { opacity: 1; transform: translateY(0); }
-    }
+    @keyframes cardReveal { to { opacity: 1; transform: translateY(0); } }
 
-    .card::before, .card::after { content: ''; }
-
+    /* ── HEADER PRIMERA PANTALLA ── */
     .eyebrow {
-      text-align: center;
-      letter-spacing: 0.35em;
-      font-size: 10px;
-      color: var(--gold);
-      text-transform: uppercase;
-      margin-bottom: 6px;
-      opacity: 0.7;
+      text-align: center; letter-spacing: 0.35em; font-size: 10px;
+      color: var(--gold); text-transform: uppercase; margin-bottom: 6px; opacity: 0.7;
     }
-
     .title {
-      font-family: 'Playfair Display', serif;
-      font-size: 36px;
-      font-weight: 900;
-      text-align: center;
-      color: var(--gold);
-      line-height: 1.1;
-      text-shadow: 0 0 40px rgba(201,168,76,0.4);
-      letter-spacing: -0.01em;
+      font-family: 'Playfair Display', serif; font-size: 36px; font-weight: 900;
+      text-align: center; color: var(--gold); line-height: 1.1;
+      text-shadow: 0 0 40px rgba(201,168,76,0.4); letter-spacing: -0.01em;
     }
-
     .subtitle {
-      font-family: 'Playfair Display', serif;
-      font-style: italic;
-      font-size: 15px;
-      text-align: center;
-      color: var(--parchment-dark);
-      margin-top: 6px;
-      letter-spacing: 0.05em;
+      font-family: 'Playfair Display', serif; font-style: italic; font-size: 15px;
+      text-align: center; color: var(--parchment-dark); margin-top: 6px; letter-spacing: 0.05em;
     }
 
     .divider {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      margin: 22px 0;
+      display: flex; align-items: center; gap: 12px; margin: 22px 0;
     }
     .divider-line {
-      flex: 1;
-      height: 1px;
+      flex: 1; height: 1px;
       background: linear-gradient(90deg, transparent, rgba(201,168,76,0.4), transparent);
     }
     .divider-icon { font-size: 16px; }
 
+    /* ── INTRO ── */
     .intro {
-      font-size: 15px;
-      line-height: 1.75;
-      color: var(--parchment-dark);
-      text-align: center;
-      font-style: italic;
-      margin-bottom: 28px;
+      font-size: 15px; line-height: 1.75; color: var(--parchment-dark);
+      text-align: center; font-style: italic; margin-bottom: 28px;
     }
-    .intro strong {
-      color: var(--parchment);
-      font-style: normal;
-      letter-spacing: 0.05em;
-    }
+    .intro strong { color: var(--parchment); font-style: normal; letter-spacing: 0.05em; }
 
+    /* ── PARTICIPANTS GRID ── */
     .list-label {
-      font-size: 11px;
-      letter-spacing: 0.25em;
-      text-transform: uppercase;
-      color: var(--gold);
-      opacity: 0.6;
-      margin-bottom: 12px;
+      font-size: 11px; letter-spacing: 0.25em; text-transform: uppercase;
+      color: var(--gold); opacity: 0.6; margin-bottom: 12px;
     }
-
-    /* Centrar última fila — 26 participantes, última fila tiene 2 */
     .participants-grid {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 7px;
-      margin-bottom: 28px;
+      display: grid; grid-template-columns: repeat(3, 1fr);
+      gap: 7px; margin-bottom: 28px;
     }
-    /* Pseudo-elemento para empujar la última fila al centro cuando son 2 */
-    .grid-spacer {
-      visibility: hidden;
-      pointer-events: none;
-    }
+    .grid-spacer { visibility: hidden; pointer-events: none; }
 
     .participant-btn {
       padding: 11px 8px;
       background: rgba(201,168,76,0.05);
       border: 1px solid rgba(201,168,76,0.18);
-      color: var(--parchment);
-      font-family: 'Crimson Text', serif;
-      font-size: 15px;
-      text-align: center;
-      cursor: pointer;
-      transition: all 0.2s ease;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 4px;
-      min-height: 52px;
-      line-height: 1.2;
+      color: var(--parchment); font-family: 'Crimson Text', serif; font-size: 15px;
+      text-align: center; cursor: pointer; transition: all 0.2s ease;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 4px; min-height: 52px; line-height: 1.2;
     }
-
     .participant-btn:hover:not(.taken) {
-      background: rgba(201,168,76,0.12);
-      border-color: rgba(201,168,76,0.6);
-      color: var(--gold-light);
-      transform: translateY(-1px);
-      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+      background: rgba(201,168,76,0.12); border-color: rgba(201,168,76,0.6);
+      color: var(--gold-light); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.4);
     }
-
-    .participant-btn.taken {
-      opacity: 0.3;
-      color: var(--parchment-dark);
-    }
-
+    .participant-btn.taken { opacity: 0.3; color: var(--parchment-dark); }
     .lock-icon { font-size: 10px; display: block; }
 
-    /* Loading */
+    /* ── LOADING ── */
     .loading-overlay {
-      position: fixed;
-      inset: 0;
-      background: var(--darker);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 999;
-      transition: opacity 0.5s ease;
+      position: fixed; inset: 0; background: var(--darker);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 999; transition: opacity 0.5s ease;
     }
     .loading-overlay.hidden { opacity: 0; pointer-events: none; }
     .loading-dot {
-      width: 8px; height: 8px;
-      background: var(--gold);
-      border-radius: 50%;
-      animation: dotPulse 1.2s ease infinite;
-      margin: 0 4px;
+      width: 8px; height: 8px; background: var(--gold); border-radius: 50%;
+      animation: dotPulse 1.2s ease infinite; margin: 0 4px;
     }
     .loading-dot:nth-child(2) { animation-delay: 0.2s; }
     .loading-dot:nth-child(3) { animation-delay: 0.4s; }
@@ -440,228 +405,154 @@
       50%      { opacity: 1;   transform: scale(1.2); }
     }
 
-    /* Code panel */
-    .code-panel {
-      display: none;
-      flex-direction: column;
-      gap: 16px;
-      animation: fadeIn 0.4s ease;
-    }
+    /* ── CODE PANEL ── */
+    .code-panel { display: none; flex-direction: column; gap: 16px; animation: fadeIn 0.4s ease; }
+    .code-panel.visible { display: flex; }
     @keyframes fadeIn {
       from { opacity: 0; transform: translateY(8px); }
       to   { opacity: 1; transform: translateY(0); }
     }
-    .code-panel.visible { display: flex; }
-
-    .code-message {
-      font-size: 14px;
-      line-height: 1.7;
-      color: var(--parchment-dark);
-      text-align: center;
-      font-style: italic;
-    }
-
+    .code-message { font-size: 14px; line-height: 1.7; color: var(--parchment-dark); text-align: center; font-style: italic; }
     .code-input-wrap { display: flex; gap: 10px; }
-
     .code-input {
-      flex: 1;
-      background: rgba(0,0,0,0.5);
-      border: 1px solid rgba(201,168,76,0.3);
-      color: var(--gold-light);
-      font-family: 'Playfair Display', serif;
-      font-size: 22px;
-      letter-spacing: 0.4em;
-      text-align: center;
-      padding: 12px;
-      outline: none;
-      transition: border-color 0.2s;
+      flex: 1; background: rgba(0,0,0,0.5); border: 1px solid rgba(201,168,76,0.3);
+      color: var(--gold-light); font-family: 'Playfair Display', serif; font-size: 22px;
+      letter-spacing: 0.4em; text-align: center; padding: 12px; outline: none; transition: border-color 0.2s;
     }
     .code-input:focus { border-color: rgba(201,168,76,0.8); box-shadow: 0 0 20px rgba(201,168,76,0.1); }
     .code-input.error { border-color: var(--crimson); animation: shake 0.4s ease; }
     @keyframes shake {
-      0%,100% { transform: translateX(0); }
-      20%,60%  { transform: translateX(-6px); }
-      40%,80%  { transform: translateX(6px); }
+      0%,100% { transform: translateX(0); } 20%,60% { transform: translateX(-6px); } 40%,80% { transform: translateX(6px); }
     }
-
     .btn-confirm {
-      padding: 12px 20px;
-      background: var(--gold);
-      color: var(--ink);
-      border: none;
-      font-family: 'Playfair Display', serif;
-      font-size: 13px;
-      font-weight: 700;
-      letter-spacing: 0.1em;
-      cursor: pointer;
-      text-transform: uppercase;
-      transition: all 0.2s;
-      white-space: nowrap;
+      padding: 12px 20px; background: var(--gold); color: var(--ink); border: none;
+      font-family: 'Playfair Display', serif; font-size: 13px; font-weight: 700;
+      letter-spacing: 0.1em; cursor: pointer; text-transform: uppercase; transition: all 0.2s; white-space: nowrap;
     }
     .btn-confirm:hover { background: var(--gold-light); box-shadow: 0 0 20px rgba(201,168,76,0.3); }
-
     .btn-back {
-      background: none;
-      border: 1px solid rgba(201,168,76,0.2);
-      color: var(--parchment-dark);
-      font-family: 'Crimson Text', serif;
-      font-size: 13px;
-      letter-spacing: 0.15em;
-      text-transform: uppercase;
-      cursor: pointer;
-      padding: 8px;
-      transition: all 0.2s;
+      background: none; border: 1px solid rgba(201,168,76,0.2); color: var(--parchment-dark);
+      font-family: 'Crimson Text', serif; font-size: 13px; letter-spacing: 0.15em;
+      text-transform: uppercase; cursor: pointer; padding: 8px; transition: all 0.2s;
     }
     .btn-back:hover { border-color: rgba(201,168,76,0.5); color: var(--parchment); }
-
-    .error-msg {
-      color: var(--crimson);
-      font-size: 13px;
-      text-align: center;
-      display: none;
-      font-style: italic;
-    }
+    .error-msg { color: var(--crimson); font-size: 13px; text-align: center; display: none; font-style: italic; }
     .error-msg.visible { display: block; }
 
-    /* Success screen */
+    /* ── SUCCESS SCREEN ── */
     .success-screen {
-      display: none;
-      flex-direction: column;
-      align-items: center;
-      gap: 20px;
-      animation: fadeIn 0.6s ease;
-      text-align: center;
+      display: none; flex-direction: column; align-items: center;
+      gap: 20px; animation: fadeIn 0.6s ease; text-align: center;
     }
     .success-screen.visible { display: flex; }
 
     .btn-back-home {
-      align-self: flex-start;
-      background: none;
-      border: none;
-      color: var(--gold);
-      opacity: 0.5;
-      font-family: 'Crimson Text', serif;
-      font-size: 14px;
-      letter-spacing: 0.15em;
-      cursor: pointer;
-      padding: 0;
-      transition: opacity 0.2s;
-      display: flex;
-      align-items: center;
-      gap: 6px;
+      align-self: flex-start; background: none; border: none; color: var(--gold);
+      opacity: 0.5; font-family: 'Crimson Text', serif; font-size: 14px;
+      letter-spacing: 0.15em; cursor: pointer; padding: 0; transition: opacity 0.2s;
+      display: flex; align-items: center; gap: 6px;
     }
     .btn-back-home:hover { opacity: 1; }
 
+    /* Nombre como título grande */
     .success-name {
-      font-family: 'Playfair Display', serif;
-      font-size: 38px;
-      color: var(--gold);
-      font-weight: 900;
-      text-shadow: 0 0 40px rgba(201,168,76,0.4);
-      letter-spacing: -0.01em;
+      font-family: 'Playfair Display', serif; font-size: 38px; font-weight: 900;
+      color: var(--gold); text-shadow: 0 0 40px rgba(201,168,76,0.4);
+      letter-spacing: -0.01em; line-height: 1.1;
     }
 
-    .game-explanation {
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
-      text-align: left;
-      width: 100%;
-    }
-
-    .game-text {
-      font-size: 15px;
-      line-height: 1.75;
-      color: var(--parchment-dark);
-      font-style: italic;
-    }
-    .game-text strong {
-      color: var(--parchment);
-      font-style: normal;
-    }
-
+    /* Explicación */
+    .game-explanation { display: flex; flex-direction: column; gap: 16px; text-align: left; width: 100%; }
+    .game-text { font-size: 15px; line-height: 1.75; color: var(--parchment-dark); font-style: italic; }
+    .game-text strong { color: var(--parchment); font-style: normal; }
     .game-warning {
-      border: 1px solid rgba(201,168,76,0.3);
-      padding: 18px 20px;
-      background: rgba(201,168,76,0.04);
-      text-align: center;
+      border: 1px solid rgba(201,168,76,0.3); padding: 18px 20px;
+      background: rgba(201,168,76,0.04); text-align: center;
     }
     .game-warning p {
-      font-family: 'Playfair Display', serif;
-      font-size: 15px;
-      color: var(--parchment);
-      line-height: 1.6;
-      font-style: italic;
-    }
-    .game-warning strong {
-      font-style: normal;
+      font-family: 'Playfair Display', serif; font-size: 15px;
+      color: var(--parchment); line-height: 1.6; font-style: italic;
     }
 
-    /* Admin panel */
-    .admin-panel {
-      margin-top: 40px;
-      border-top: 1px solid rgba(201,168,76,0.1);
-      padding-top: 20px;
+    /* Tarjeta de misión */
+    .mission-card {
+      width: 100%; border: 1px solid rgba(201,168,76,0.35);
+      background: rgba(201,168,76,0.04);
       display: none;
-      width: 100%;
+    }
+    .mission-card-header {
+      padding: 12px 20px; border-bottom: 1px solid rgba(201,168,76,0.15);
+      font-size: 10px; letter-spacing: 0.3em; text-transform: uppercase;
+      color: var(--gold); opacity: 0.6;
+    }
+    .mission-pending {
+      padding: 16px 20px; font-style: italic; font-size: 14px;
+      color: var(--parchment-dark); text-align: center; line-height: 1.6;
+    }
+    .mission-rows { padding: 8px 0; }
+    .mission-row {
+      display: flex; align-items: center; gap: 16px;
+      padding: 14px 20px; border-bottom: 1px solid rgba(201,168,76,0.08);
+    }
+    .mission-row:last-child { border-bottom: none; }
+    .mission-icon { font-size: 20px; flex-shrink: 0; width: 28px; text-align: center; }
+    .mission-label {
+      font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase;
+      color: var(--gold); opacity: 0.5; margin-bottom: 3px;
+    }
+    .mission-value {
+      font-family: 'Playfair Display', serif; font-size: 18px;
+      color: var(--parchment); font-weight: 700;
+    }
+
+    /* ── ADMIN PANEL ── */
+    .admin-panel {
+      margin-top: 40px; border-top: 1px solid rgba(201,168,76,0.1);
+      padding-top: 20px; display: none; width: 100%;
     }
     .admin-panel.visible { display: block; }
     .admin-title {
-      font-size: 10px;
-      letter-spacing: 0.3em;
-      text-transform: uppercase;
-      color: var(--gold);
-      opacity: 0.4;
-      margin-bottom: 12px;
-      text-align: center;
+      font-size: 10px; letter-spacing: 0.3em; text-transform: uppercase;
+      color: var(--gold); opacity: 0.4; margin-bottom: 16px; text-align: center;
+    }
+    .btn-randomize {
+      width: 100%; padding: 14px; background: rgba(201,168,76,0.1);
+      border: 1px solid rgba(201,168,76,0.4); color: var(--gold);
+      font-family: 'Playfair Display', serif; font-size: 14px; font-weight: 700;
+      letter-spacing: 0.1em; text-transform: uppercase; cursor: pointer;
+      transition: all 0.2s; margin-bottom: 8px;
+    }
+    .btn-randomize:hover { background: rgba(201,168,76,0.2); box-shadow: 0 0 20px rgba(201,168,76,0.15); }
+    .randomize-status {
+      font-size: 12px; color: var(--gold); opacity: 0.7; text-align: center;
+      font-style: italic; min-height: 18px; margin-bottom: 20px;
     }
     .log-entry {
-      font-size: 12px;
-      color: var(--parchment-dark);
-      opacity: 0.6;
-      padding: 4px 0;
-      border-bottom: 1px solid rgba(255,255,255,0.04);
-      display: flex;
-      justify-content: space-between;
-      gap: 12px;
+      font-size: 12px; color: var(--parchment-dark); opacity: 0.6;
+      padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.04);
+      display: flex; justify-content: space-between; gap: 12px;
     }
     .log-time   { opacity: 0.5; white-space: nowrap; font-size: 11px; }
     .log-name   { font-style: italic; }
     .log-method { color: var(--gold); opacity: 0.6; }
-
     .btn-reset {
-      margin-top: 16px;
-      width: 100%;
-      background: none;
-      border: 1px solid rgba(139,26,26,0.4);
-      color: rgba(139,26,26,0.6);
-      font-family: 'Crimson Text', serif;
-      font-size: 12px;
-      letter-spacing: 0.2em;
-      text-transform: uppercase;
-      padding: 8px;
-      cursor: pointer;
-      transition: all 0.2s;
+      margin-top: 16px; width: 100%; background: none;
+      border: 1px solid rgba(139,26,26,0.4); color: rgba(139,26,26,0.6);
+      font-family: 'Crimson Text', serif; font-size: 12px; letter-spacing: 0.2em;
+      text-transform: uppercase; padding: 8px; cursor: pointer; transition: all 0.2s;
     }
     .btn-reset:hover { border-color: var(--crimson); color: var(--crimson); }
 
-    /* Sync dot */
+    /* ── SYNC DOT ── */
     .sync-dot {
-      position: fixed;
-      top: 14px;
-      right: 14px;
-      width: 7px; height: 7px;
-      border-radius: 50%;
-      background: #2ecc71;
-      box-shadow: 0 0 6px #2ecc71;
-      z-index: 100;
-      animation: syncPulse 2s ease infinite;
+      position: fixed; top: 14px; right: 14px;
+      width: 7px; height: 7px; border-radius: 50%;
+      background: #2ecc71; box-shadow: 0 0 6px #2ecc71;
+      z-index: 100; animation: syncPulse 2s ease infinite;
     }
-    @keyframes syncPulse {
-      0%,100% { opacity: 1; }
-      50%      { opacity: 0.4; }
-    }
+    @keyframes syncPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
   </style>
+
 </head>
 <body>
 
@@ -675,78 +566,114 @@
 
 <div class="container">
   <div class="card">
-    <p class="eyebrow">2026</p>
-    <h1 class="title">Desastre del 8A</h1>
-    <p class="subtitle">El cumpleaños de Tom</p>
 
-    <div class="divider">
-      <div class="divider-line"></div>
-      <span class="divider-icon">🔍</span>
-      <div class="divider-line"></div>
+```
+<!-- ── PANTALLA 1: INICIO ── -->
+<div id="screen-select">
+  <p class="eyebrow">2026</p>
+  <h1 class="title">Desastre del 8A</h1>
+  <p class="subtitle">El cumpleaños de Tom</p>
+  <div class="divider">
+    <div class="divider-line"></div>
+    <span class="divider-icon">🔍</span>
+    <div class="divider-line"></div>
+  </div>
+  <p class="intro">
+    Ha habido una amenaza de que en esta finca algo terrible va a pasar hoy,
+    los invitados han recibido unas directrices:<br><br>
+    <strong>"Ser el último en pie."</strong>
+  </p>
+  <p class="list-label">¿Quién eres tú?</p>
+  <div class="participants-grid" id="participants-list"></div>
+</div>
+
+<!-- ── PANTALLA 2: CÓDIGO ── -->
+<div class="code-panel" id="screen-code">
+  <p class="code-message" id="code-message"></p>
+  <div class="code-input-wrap">
+    <input type="password" class="code-input" id="code-input" maxlength="4" placeholder="····" inputmode="numeric" />
+    <button class="btn-confirm" onclick="checkCode()">Entrar</button>
+  </div>
+  <p class="error-msg" id="error-msg">Código incorrecto. Intento registrado.</p>
+  <button class="btn-back" onclick="goBack()">← Volver</button>
+</div>
+
+<!-- ── PANTALLA 3: PERFIL DEL JUGADOR ── -->
+<div class="success-screen" id="screen-success">
+
+  <button class="btn-back-home" onclick="goBackFromSuccess()">← Volver al inicio</button>
+
+  <!-- Nombre como título -->
+  <p class="eyebrow" style="margin-bottom:4px">2026</p>
+  <h1 class="success-name" id="success-name"></h1>
+  <p class="subtitle">El cumpleaños de Tom</p>
+
+  <div class="divider" style="width:100%">
+    <div class="divider-line"></div>
+    <span class="divider-icon">🔍</span>
+    <div class="divider-line"></div>
+  </div>
+
+  <!-- Explicación del juego -->
+  <div class="game-explanation">
+    <p class="game-text">
+      Durante todo el día tendrás un <strong>objetivo</strong> al cual lo tendrás que matar
+      en un <strong>sitio determinado</strong> con un <strong>arma determinada</strong>,
+      asignados aleatoriamente.
+    </p>
+    <p class="game-text">
+      Cuando lo mates, deberás mostrarle tu objeto y lugar para confirmar que la muerte es válida.
+      En ese entonces pondrás el código de la persona para tener su objetivo.
+    </p>
+    <div class="game-warning">
+      <p><strong>"Asesina con cuidado, si alguien te descubre, tú también morirás,
+      esa persona deberá adivinar tus tres objetivos."</strong></p>
     </div>
+  </div>
 
-    <!-- PANTALLA 1: Selección -->
-    <div id="screen-select">
-      <p class="intro">
-        Ha habido una amenaza de que en esta finca algo terrible va a pasar hoy,
-        los invitados han recibido unas directrices:<br><br>
-        <strong>"Ser el último en pie."</strong>
-      </p>
-      <p class="list-label">¿Quién eres tú?</p>
-      <div class="participants-grid" id="participants-list"></div>
+  <!-- Tarjeta de misión -->
+  <div class="mission-card" id="mission-card">
+    <div class="mission-card-header">Tu misión</div>
+    <div class="mission-pending" id="mission-pending">
+      El juego aún no ha comenzado.<br>El organizador activará las misiones en breve.
     </div>
-
-    <!-- PANTALLA 2: Código -->
-    <div class="code-panel" id="screen-code">
-      <p class="code-message" id="code-message"></p>
-      <div class="code-input-wrap">
-        <input type="password" class="code-input" id="code-input" maxlength="4" placeholder="····" inputmode="numeric" />
-        <button class="btn-confirm" onclick="checkCode()">Entrar</button>
-      </div>
-      <p class="error-msg" id="error-msg">Código incorrecto. Intento registrado.</p>
-      <button class="btn-back" onclick="goBack()">← Volver</button>
-    </div>
-
-    <!-- PANTALLA 3: Bienvenida -->
-    <div class="success-screen" id="screen-success">
-      <button class="btn-back-home" onclick="goBackFromSuccess()">← Volver al inicio</button>
-
-      <p class="success-name" id="success-name"></p>
-
-      <div class="divider" style="width:100%">
-        <div class="divider-line"></div>
-        <span class="divider-icon">🔍</span>
-        <div class="divider-line"></div>
-      </div>
-
-      <div class="game-explanation">
-        <p class="game-text">
-          Durante todo el día tendrás un <strong>objetivo</strong> al cual lo tendrás que matar
-          en un <strong>sitio determinado</strong> con un <strong>arma determinada</strong>,
-          asignados aleatoriamente.
-        </p>
-        <p class="game-text">
-          Cuando lo mates, deberás mostrarle tu objeto y lugar para confirmar que la muerte es válida.
-          En ese entonces pondrás el código de la persona para tener su objetivo.
-        </p>
-        <div class="game-warning">
-          <p><strong>"Asesina con cuidado, si alguien te descubre, tú también morirás,
-          esa persona deberá adivinar tus tres objetivos."</strong></p>
+    <div class="mission-rows" id="mission-rows" style="display:none">
+      <div class="mission-row">
+        <div class="mission-icon">🎯</div>
+        <div>
+          <div class="mission-label">Objetivo</div>
+          <div class="mission-value" id="mission-objetivo">—</div>
         </div>
       </div>
-
-      <div class="secret-card" id="mission-card" style="display:none">
-        <p class="secret-card-label">Tu misión — Pendiente de inicio</p>
-        <p class="secret-content">El juego aún no ha comenzado. En cuanto el organizador lo active, aquí aparecerán tu objetivo, tu arma y tu lugar.</p>
+      <div class="mission-row">
+        <div class="mission-icon">🔪</div>
+        <div>
+          <div class="mission-label">Arma</div>
+          <div class="mission-value" id="mission-arma">—</div>
+        </div>
       </div>
-
-      <!-- ADMIN PANEL — solo visible para Javi Sanjuán -->
-      <div class="admin-panel" id="admin-panel">
-        <p class="admin-title">✦ Registro de accesos ✦</p>
-        <div id="log-list"></div>
-        <button class="btn-reset" onclick="resetGame()">⚠ Resetear todos los accesos</button>
+      <div class="mission-row">
+        <div class="mission-icon">📍</div>
+        <div>
+          <div class="mission-label">Lugar</div>
+          <div class="mission-value" id="mission-lugar">—</div>
+        </div>
       </div>
     </div>
+  </div>
+
+  <!-- Admin — solo Javi Sanjuán -->
+  <div class="admin-panel" id="admin-panel">
+    <p class="admin-title">✦ Panel de control ✦</p>
+    <button class="btn-randomize" onclick="randomizeMissions()">🎲 Randomizar misiones</button>
+    <p class="randomize-status" id="randomize-status"></p>
+    <p class="admin-title">Registro de accesos</p>
+    <div id="log-list"></div>
+    <button class="btn-reset" onclick="resetGame()">⚠ Resetear todos los datos</button>
+  </div>
+
+</div>
+```
 
   </div>
 </div>
