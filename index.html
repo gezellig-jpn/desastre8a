@@ -169,16 +169,44 @@
       const c = document.getElementById('passwords-list');
       if (!c) return;
       c.innerHTML = PARTICIPANTS.map(name => {
-        const key      = sanitizeKey(name);
-        const changed  = !!passwords[key];
-        const code     = PLAYER_CODES[name];
+        const key     = sanitizeKey(name);
+        const changed = !!passwords[key];
+        const code    = PLAYER_CODES[name];
         return `<div class="pw-entry">
           <span class="pw-name">${name}</span>
           <span class="pw-code">${code}</span>
-          <span class="pw-status ${changed ? 'changed' : ''}">${changed ? '✓ Cambiada' : 'Original'}</span>
+          <span class="pw-status ${changed ? 'changed' : ''}">${changed ? '✓' : '—'}</span>
+          <button class="btn-pw-edit" onclick="adminEditPassword('${name}')">✏️</button>
         </div>`;
       }).join('');
     }
+
+    window.adminEditPassword = function(name) {
+      document.getElementById('admin-pw-edit-name').textContent = name;
+      document.getElementById('admin-pw-target').value = name;
+      document.getElementById('admin-pw-new').value = '';
+      document.getElementById('admin-pw-error').classList.remove('visible');
+      document.getElementById('admin-pw-panel').classList.add('visible');
+      setTimeout(() => document.getElementById('admin-pw-new').focus(), 100);
+    };
+
+    window.submitAdminPassword = async function() {
+      const name  = document.getElementById('admin-pw-target').value;
+      const newPw = document.getElementById('admin-pw-new').value;
+      const err   = document.getElementById('admin-pw-error');
+      if (!/^\d{4}$/.test(newPw)) {
+        err.textContent = 'Debe ser exactamente 4 números.';
+        err.classList.add('visible'); return;
+      }
+      await update(ref(db,'passwords'), { [sanitizeKey(name)]: newPw });
+      PLAYER_CODES[name] = newPw;
+      writeLog(`Admin cambió contraseña de ${name}`, '🔐 Admin');
+      document.getElementById('admin-pw-panel').classList.remove('visible');
+    };
+
+    window.closeAdminPwPanel = function() {
+      document.getElementById('admin-pw-panel').classList.remove('visible');
+    };
 
     // ── ACCESO ───────────────────────────────────────────────────
     async function grantAccess(name) {
@@ -286,6 +314,22 @@
         return { objetivos: [{ objetivo: raw.objetivo, arma: raw.arma, lugar: raw.lugar }], history: raw.history || [] };
       }
       return { objetivos: raw.objetivos || [], history: raw.history || [] };
+    }
+
+    // Sigue la cadena de objetivos hasta encontrar uno vivo
+    // Evita bucles infinitos con un límite de profundidad
+    function resolveTarget(name, depth = 0) {
+      if (depth > PARTICIPANTS.length) return null; // evitar bucle infinito
+      const isDead = !!eliminated[sanitizeKey(name)];
+      if (!isDead) {
+        // Está vivo — devolver su misión como objetivo heredable
+        const m = getMission(name);
+        return m && m.objetivos.length > 0 ? m.objetivos[0] : null;
+      }
+      // Está muerto — seguir la cadena: buscar quién era su objetivo
+      const m = getMission(name);
+      if (!m || m.objetivos.length === 0) return null;
+      return resolveTarget(m.objetivos[0].objetivo, depth + 1);
     }
 
     function renderMission(name) {
@@ -417,15 +461,16 @@
     async function executeKill(killer, objIdx, victim, arma, lugar) {
       const killerKey     = sanitizeKey(killer);
       const victimKey     = sanitizeKey(victim);
-      const victimMission = getMission(victim);
       const now = new Date();
       const timeStr = now.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'});
       const dateStr = now.toLocaleDateString('es-ES',{day:'2-digit',month:'2-digit'});
 
-      // Primer objetivo de la víctima (el que se hereda)
-      const inheritedObj = victimMission && victimMission.objetivos.length > 0
-        ? victimMission.objetivos[0]
-        : { objetivo: '— Sin objetivo —', arma: arma, lugar: lugar };
+      // Marcar víctima como eliminada PRIMERO para que resolveTarget la ignore
+      await update(ref(db, 'eliminated'), { [victimKey]: 'killed' });
+
+      // Resolver el siguiente objetivo vivo siguiendo la cadena desde la víctima
+      const resolvedObj = resolveTarget(victim);
+      const inheritedObj = resolvedObj || { objetivo: '— Sin objetivo —', arma: arma, lugar: lugar };
 
       // 1. Actualizar misión del asesino — reemplazar slot idx con el heredado
       const currentMission = getMission(killer);
@@ -434,31 +479,24 @@
       const newHistory     = [...currentMission.history, { victim, arma, lugar }];
       await set(ref(db, `missions/${killerKey}`), { objetivos: newObjetivos, history: newHistory });
 
-      // 2. Marcar víctima como eliminada
-      await update(ref(db, 'eliminated'), { [victimKey]: 'killed' });
-
-      // 3. Buscar a todos los demás que tenían a la víctima como objetivo y actualizarles SIN historial
+      // 2. Redistribuir a todos los que tenían a la víctima como objetivo → siguiente vivo en cadena
       const updates = {};
       PARTICIPANTS.forEach(name => {
         if (name === killer || name === victim) return;
         const m = getMission(name);
-        if (!m) return;
-        const hasVictim = m.objetivos.some(o => o.objetivo === victim);
-        if (!hasVictim) return;
-        const updatedObjetivos = m.objetivos.map(o =>
-          o.objetivo === victim
-            ? { objetivo: inheritedObj.objetivo, arma: inheritedObj.arma, lugar: inheritedObj.lugar }
-            : o
-        );
-        updates[`missions/${sanitizeKey(name)}`] = { objetivos: updatedObjetivos, history: m.history };
+        if (!m || !m.objetivos.some(o => o.objetivo === victim)) return;
+        updates[`missions/${sanitizeKey(name)}`] = {
+          objetivos: m.objetivos.map(o => o.objetivo === victim ? inheritedObj : o),
+          history: m.history
+        };
       });
       if (Object.keys(updates).length > 0) await update(ref(db), updates);
 
-      // 4. Log y registro
+      // 3. Log y registro
       push(ref(db,'kills'), { killer, victim, arma, lugar, date: dateStr, time: timeStr });
       writeLog(`${killer} eliminó a ${victim}`, '💀 Muerte');
 
-      // 5. Overlay
+      // 4. Overlay
       document.querySelectorAll('.death-panel').forEach(p => p.classList.remove('visible'));
       document.getElementById('death-success-name').textContent = victim;
       document.getElementById('death-success-next').textContent = inheritedObj.objetivo;
@@ -592,58 +630,59 @@
       const victimKey     = sanitizeKey(victima);
       const asesinKey     = sanitizeKey(asesino);
       const myMission     = getMission(currentPlayer);
-      const victimMission = getMission(victima);
       const now = new Date();
       const timeStr = now.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'});
       const dateStr = now.toLocaleDateString('es-ES',{day:'2-digit',month:'2-digit'});
 
-      // El detective MANTIENE sus objetivos actuales Y AÑADE el primer objetivo de la víctima
-      const extraObj = victimMission && victimMission.objetivos.length > 0
-        ? victimMission.objetivos[0]
-        : { objetivo: '— Sin objetivo —', arma: arma, lugar: lugar };
+      // Marcar eliminados PRIMERO para que resolveTarget los ignore en la cadena
+      const allUpdates = {};
+      allUpdates[`eliminated/${victimKey}`]  = 'killed';
+      allUpdates[`eliminated/${asesinKey}`]  = 'caught';
+      await update(ref(db), allUpdates);
 
-      const asesinMission   = getMission(asesino);
-      const asesinInherited = asesinMission && asesinMission.objetivos.length > 0
-        ? asesinMission.objetivos[0] : null;
+      // Resolver siguiente objetivo vivo desde la víctima (saltando muertos)
+      const extraObj = resolveTarget(victima) || { objetivo: '— Sin objetivo —', arma: arma, lugar: lugar };
 
+      // Resolver siguiente objetivo vivo desde el asesino (saltando muertos)
+      const asesinResolved = resolveTarget(asesino);
+
+      // Detective: mantiene sus objetivos + añade el resuelto de la víctima
       const currentObjetivos = myMission ? myMission.objetivos : [];
       const newObjetivos = [...currentObjetivos, extraObj];
       const newHistory   = [...(myMission ? myMission.history : []),
         { victim: `${victima} (víctima de ${asesino})`, arma: '(detective)', lugar: '(detective)' }
       ];
 
-      const allUpdates = {};
-      allUpdates[`missions/${detKey}`]       = { objetivos: newObjetivos, history: newHistory };
-      allUpdates[`eliminated/${victimKey}`]  = 'killed';
-      allUpdates[`eliminated/${asesinKey}`]  = 'caught';
+      const redistUpdates = {};
+      redistUpdates[`missions/${detKey}`] = { objetivos: newObjetivos, history: newHistory };
 
-      // Redistribuir a quien tenía al asesino como objetivo → hereda primer obj del asesino
-      if (asesinInherited) {
+      // Redistribuir a quien tenía al asesino → siguiente vivo desde asesino
+      if (asesinResolved) {
         PARTICIPANTS.forEach(name => {
           if (name === currentPlayer || name === asesino || name === victima) return;
           const m = getMission(name);
           if (!m || !m.objetivos.some(o => o.objetivo === asesino)) return;
-          allUpdates[`missions/${sanitizeKey(name)}`] = {
-            objetivos: m.objetivos.map(o => o.objetivo === asesino ? asesinInherited : o),
+          redistUpdates[`missions/${sanitizeKey(name)}`] = {
+            objetivos: m.objetivos.map(o => o.objetivo === asesino ? asesinResolved : o),
             history: m.history
           };
         });
       }
 
-      // Redistribuir a quien tenía a la víctima como objetivo → hereda primer obj de la víctima
+      // Redistribuir a quien tenía a la víctima → siguiente vivo desde víctima
       PARTICIPANTS.forEach(name => {
         if (name === currentPlayer || name === asesino || name === victima) return;
         const m = getMission(name);
         if (!m || !m.objetivos.some(o => o.objetivo === victima)) return;
-        const existing = allUpdates[`missions/${sanitizeKey(name)}`];
+        const existing = redistUpdates[`missions/${sanitizeKey(name)}`];
         const base = existing || { objetivos: m.objetivos, history: m.history };
-        allUpdates[`missions/${sanitizeKey(name)}`] = {
+        redistUpdates[`missions/${sanitizeKey(name)}`] = {
           objetivos: base.objetivos.map(o => o.objetivo === victima ? extraObj : o),
           history: base.history
         };
       });
 
-      await update(ref(db), allUpdates);
+      await update(ref(db), redistUpdates);
       push(ref(db,'kills'), { killer: `${currentPlayer} (detective)`, victim: `${asesino} + ${victima}`, arma, lugar, date: dateStr, time: timeStr });
       writeLog(`${currentPlayer} pilló a ${asesino} matando a ${victima}`, '🔍 Detective');
 
@@ -901,7 +940,6 @@
     .pw-error { color: var(--crimson); font-size: 13px; text-align: center; display: none; font-style: italic; }
     .pw-error.visible { display: block; }
 
-    /* Passwords list in admin */
     .pw-entry {
       display: flex; align-items: center; gap: 10px; padding: 6px 0;
       border-bottom: 1px solid rgba(255,255,255,0.04); font-size: 12px;
@@ -910,6 +948,27 @@
     .pw-code { font-family: 'Playfair Display', serif; color: var(--gold); letter-spacing: 0.2em; }
     .pw-status { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; opacity: 0.4; }
     .pw-status.changed { color: #2dd4bf; opacity: 0.8; }
+    .btn-pw-edit {
+      background: none; border: 1px solid rgba(201,168,76,0.2); color: rgba(201,168,76,0.5);
+      font-size: 11px; padding: 2px 7px; cursor: pointer; transition: all 0.2s; border-radius: 2px;
+    }
+    .btn-pw-edit:hover { border-color: rgba(201,168,76,0.6); color: var(--gold); }
+
+    /* Panel edición contraseña admin */
+    .admin-pw-panel {
+      display: none; flex-direction: column; gap: 12px;
+      border: 1px solid rgba(45,212,191,0.3); padding: 18px;
+      background: rgba(45,212,191,0.04); margin-bottom: 16px;
+      animation: fadeIn 0.3s ease;
+    }
+    .admin-pw-panel.visible { display: flex; }
+    .admin-pw-title {
+      font-size: 11px; letter-spacing: 0.25em; text-transform: uppercase;
+      color: #2dd4bf; opacity: 0.8; text-align: center;
+    }
+    .admin-pw-subtitle {
+      font-size: 13px; color: rgba(45,212,191,0.7); text-align: center; font-style: italic;
+    }
     .eliminated-notice {
       display: none; flex-direction: column; align-items: center;
       gap: 14px; text-align: center; width: 100%;
@@ -1190,6 +1249,18 @@
   <button class="btn-randomize" onclick="randomizeMissions()">🎲 Randomizar misiones</button>
   <p class="randomize-status" id="randomize-status"></p>
   <p class="admin-title" style="margin-bottom:8px">Contraseñas actuales</p>
+  <!-- Panel editar contraseña -->
+  <div class="admin-pw-panel" id="admin-pw-panel">
+    <p class="admin-pw-title">🔐 Cambiar contraseña</p>
+    <p class="admin-pw-subtitle">Cambiando la de <strong id="admin-pw-edit-name" style="color:#2dd4bf"></strong></p>
+    <input type="hidden" id="admin-pw-target" />
+    <input type="password" class="pw-input" id="admin-pw-new" maxlength="4" placeholder="····" inputmode="numeric" style="font-size:20px;padding:10px" />
+    <p class="pw-error" id="admin-pw-error"></p>
+    <div style="display:flex;gap:8px">
+      <button class="btn-pw-confirm" onclick="submitAdminPassword()" style="flex:1;padding:10px;font-size:12px">Guardar</button>
+      <button class="btn-cancel" onclick="closeAdminPwPanel()" style="flex:1">Cancelar</button>
+    </div>
+  </div>
   <div id="passwords-list" style="margin-bottom:20px"></div>
   <p class="admin-title" style="margin-bottom:8px">Registro de muertes</p>
   <div id="kills-list" style="margin-bottom:20px"></div>
