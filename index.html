@@ -170,13 +170,31 @@
       }
     }
 
-    // ── ELIMINADO — solo puede ver historial ─────────────────────
+    // ── ELIMINADO ────────────────────────────────────────────────
     function checkEliminated() {
       if (!currentPlayer) return;
       const val  = eliminated[sanitizeKey(currentPlayer)];
       const dead = val === 'killed' || val === 'caught';
+
+      // Zona de acciones
       document.getElementById('action-zone').style.display = dead ? 'none' : 'flex';
-      document.getElementById('dead-notice').style.display = dead ? 'block' : 'none';
+
+      // Mensaje pequeño antiguo — ya no lo usamos, ocultarlo
+      document.getElementById('dead-notice').style.display = 'none';
+
+      // Mensaje grande de eliminado
+      const bigNotice = document.getElementById('eliminated-notice');
+      if (dead) {
+        bigNotice.style.display = 'flex';
+        document.getElementById('eliminated-reason').textContent =
+          val === 'caught' ? 'Has sido pillado.' : 'Has sido asesinado.';
+      } else {
+        bigNotice.style.display = 'none';
+      }
+
+      // Atenuar tarjeta de misión si está eliminado
+      const missionCard = document.getElementById('mission-card');
+      if (missionCard) missionCard.style.opacity = dead ? '0.3' : '1';
     }
 
     // ── MISIÓN — soporta múltiples objetivos (array 'objetivos') ──
@@ -428,8 +446,45 @@
         err.textContent = 'Incorrecto. Tu acusación era errónea... y ahora tú también morirás.';
         err.classList.add('visible');
         setTimeout(async () => {
-          await update(ref(db,'eliminated'), { [sanitizeKey(currentPlayer)]: 'caught' });
+          const detKey    = sanitizeKey(currentPlayer);
+          const myMission = getMission(currentPlayer);
+
+          // El objetivo del detective pasa al acusado
+          if (myMission && myMission.objetivos.length > 0) {
+            const asesinMission  = getMission(asesino);
+            const currentAsesin  = asesinMission ? asesinMission.objetivos : [];
+            const allAsesinObjs  = [...currentAsesin, ...myMission.objetivos];
+            const asesinHistory  = asesinMission ? asesinMission.history : [];
+            await set(ref(db, `missions/${sanitizeKey(asesino)}`), {
+              objetivos: allAsesinObjs,
+              history:   asesinHistory
+            });
+          }
+
+          // Redistribuir a cualquiera que tuviera al detective como objetivo
+          const redistUpdates = {};
+          const detInherited = myMission && myMission.objetivos.length > 0 ? myMission.objetivos[0] : null;
+          if (detInherited) {
+            PARTICIPANTS.forEach(name => {
+              if (name === currentPlayer) return;
+              const m = getMission(name);
+              if (!m || !m.objetivos.some(o => o.objetivo === currentPlayer)) return;
+              redistUpdates[`missions/${sanitizeKey(name)}`] = {
+                objetivos: m.objetivos.map(o => o.objetivo === currentPlayer ? detInherited : o),
+                history: m.history
+              };
+            });
+          }
+          redistUpdates[`eliminated/${detKey}`] = 'caught';
+          await update(ref(db), redistUpdates);
+
           writeLog(`${currentPlayer} falló como detective`, '💀 Eliminado');
+          push(ref(db,'kills'), {
+            killer: `${asesino} (acusación fallida de ${currentPlayer})`,
+            victim: currentPlayer, arma: '—', lugar: '—',
+            date: new Date().toLocaleDateString('es-ES',{day:'2-digit',month:'2-digit'}),
+            time: new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})
+          });
           document.getElementById('detective-panel').classList.remove('visible');
           showingDetective = false;
         }, 2000);
@@ -682,7 +737,25 @@
     .mission-label{font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold);opacity:.5;margin-bottom:3px;}
     .mission-value{font-family:'Playfair Display',serif;font-size:18px;color:var(--parchment);font-weight:700;}
 
-    /* Dead notice */
+    /* Mensaje eliminado grande */
+    .eliminated-notice {
+      display: none; flex-direction: column; align-items: center;
+      gap: 14px; text-align: center; width: 100%;
+      padding: 32px 20px;
+      border: 1px solid rgba(139,26,26,0.5);
+      background: rgba(139,26,26,0.08);
+      animation: fadeIn 0.6s ease;
+    }
+    .eliminated-icon { font-size: 52px; animation: pulse 2s ease infinite; }
+    .eliminated-title {
+      font-family: 'Playfair Display', serif; font-size: 32px; font-weight: 900;
+      color: #e07070; text-shadow: 0 0 30px rgba(139,26,26,0.5); letter-spacing: -0.01em;
+    }
+    .eliminated-reason {
+      font-size: 15px; color: var(--parchment-dark); font-style: italic; line-height: 1.6;
+    }
+
+    /* Dead notice (pequeño, ya no se usa) */
     .dead-notice{display:none;text-align:center;font-style:italic;color:var(--parchment-dark);opacity:.5;font-size:14px;padding:16px;border:1px solid rgba(139,26,26,.2);}
 
     /* Action zone */
@@ -840,6 +913,13 @@
   <p class="game-text">Durante todo el día tendrás un <strong>objetivo</strong> al cual lo tendrás que matar en un <strong>sitio determinado</strong> con un <strong>arma determinada</strong>, asignados aleatoriamente.</p>
   <p class="game-text">Cuando lo mates, deberás mostrarle tu objeto y lugar para confirmar que la muerte es válida. En ese entonces pondrás el código de la persona para tener su objetivo.</p>
   <p class="game-text">Asesina con cuidado, si alguien te descubre, tú también morirás. Esa persona deberá adivinar tus tres objetivos.</p>
+</div>
+
+<!-- Mensaje eliminado grande -->
+<div class="eliminated-notice" id="eliminated-notice">
+  <div class="eliminated-icon">💀</div>
+  <div class="eliminated-title">Has sido eliminado</div>
+  <div class="eliminated-reason" id="eliminated-reason"></div>
 </div>
 
 <!-- Misión -->
