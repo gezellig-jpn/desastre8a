@@ -605,17 +605,48 @@
     function renderKills(entries) {
       const c = document.getElementById('kills-list');
       if (!c) return;
-      c.innerHTML = entries.length
-        ? entries.map(e=>`
-            <div class="kill-entry">
-              <span class="kill-killer">🗡 ${e.killer}</span>
-              <span class="kill-arrow">→</span>
-              <span class="kill-victim">💀 ${e.victim}</span>
-              <span class="kill-detail">${e.arma} · ${e.lugar}</span>
+      if (!entries.length) {
+        c.innerHTML = '<p style="font-size:12px;opacity:0.4;text-align:center;font-style:italic;">Sin muertes registradas</p>';
+        return;
+      }
+      // Guardar referencia a las entries con su Firebase key para poder revivir
+      killEntries = entries;
+      c.innerHTML = entries.map((e, i) => {
+        // Determinar icono y tipo según el killer
+        let icon = '🗡';
+        let tipo = '';
+        if (e.killer && e.killer.includes('(detective)')) { icon = '🔍'; tipo = 'Detective'; }
+        else if (e.killer && e.killer.includes('acusación fallida')) { icon = '❌'; tipo = 'Fallo acusación'; }
+
+        // Víctimas para el botón de revivir — extraer nombre(s) simples
+        const victims = e.victim.split(' + ').map(v => v.replace(/\(.*\)/, '').trim());
+
+        return `
+          <div class="kill-entry">
+            <span class="kill-killer">${icon} ${e.killer}</span>
+            <span class="kill-arrow">→</span>
+            <span class="kill-victim">💀 ${e.victim}</span>
+            <span class="kill-detail">${tipo ? tipo + ' · ' : ''}${e.arma} · ${e.lugar}</span>
+            <div class="kill-footer">
               <span class="kill-time">${e.date} ${e.time}</span>
-            </div>`).join('')
-        : '<p style="font-size:12px;opacity:0.4;text-align:center;font-style:italic;">Sin muertes registradas</p>';
+              <button class="btn-revive" onclick="revivePlayer(${JSON.stringify(victims)})">↩ Revivir</button>
+            </div>
+          </div>`;
+      }).join('');
     }
+
+    let killEntries = [];
+
+    window.revivePlayer = async function(victims) {
+      const names = victims.filter(v => PARTICIPANTS.includes(v));
+      if (!names.length) { alert('No se puede identificar a la víctima.'); return; }
+      const nameList = names.join(' y ');
+      if (!confirm(`¿Revivir a ${nameList}? Se eliminará su estado de muerte.`)) return;
+      const updates = {};
+      names.forEach(n => { updates[`eliminated/${sanitizeKey(n)}`] = null; });
+      await update(ref(db), updates);
+      writeLog(`Admin revivió a ${nameList}`, '↩ Revivir');
+    };
 
     // ── ADMIN ────────────────────────────────────────────────────
     window.resetGame = function() {
@@ -839,12 +870,15 @@
     .log-time{opacity:.5;white-space:nowrap;font-size:11px;}
     .log-name{font-style:italic;}
     .log-method{color:var(--gold);opacity:.6;}
-    .kill-entry{font-size:12px;color:var(--parchment-dark);padding:6px 0;border-bottom:1px solid rgba(255,255,255,.04);display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center;}
+    .kill-entry{font-size:12px;color:var(--parchment-dark);padding:8px 0;border-bottom:1px solid rgba(255,255,255,.04);display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center;}
+    .kill-footer{display:flex;justify-content:space-between;align-items:center;width:100%;margin-top:4px;}
     .kill-killer{color:#e07070;}
     .kill-arrow{opacity:.4;}
     .kill-victim{color:var(--parchment-dark);}
     .kill-detail{opacity:.5;font-style:italic;font-size:11px;width:100%;}
-    .kill-time{opacity:.4;font-size:11px;margin-left:auto;}
+    .kill-time{opacity:.4;font-size:11px;}
+    .btn-revive{background:none;border:1px solid rgba(201,168,76,.25);color:rgba(201,168,76,.5);font-family:'Crimson Text',serif;font-size:11px;letter-spacing:.1em;text-transform:uppercase;cursor:pointer;padding:3px 8px;transition:all .2s;}
+    .btn-revive:hover{border-color:rgba(201,168,76,.6);color:var(--gold);}
     .btn-reset{margin-top:16px;width:100%;background:none;border:1px solid rgba(139,26,26,.4);color:rgba(139,26,26,.6);font-family:'Crimson Text',serif;font-size:12px;letter-spacing:.2em;text-transform:uppercase;padding:8px;cursor:pointer;transition:all .2s;}
     .btn-reset:hover{border-color:var(--crimson);color:var(--crimson);}
 
