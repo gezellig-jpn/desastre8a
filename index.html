@@ -19,7 +19,8 @@
 
     const ADMIN_NAME = 'Javi Sanjuán';
 
-    const PLAYER_CODES = {
+    // Códigos base — se sobreescriben con los personalizados guardados en Firebase
+    let PLAYER_CODES = {
       'Adrián':       '1111',
       'Arturo':       '6767',
       'Asier':        '3434',
@@ -57,6 +58,7 @@
     let claimed    = {};
     let missions   = {};
     let eliminated = {};
+    let passwords  = {}; // contraseñas personalizadas guardadas en Firebase
     let currentPlayer   = null;
     let adminVisible    = false;
     let showingDeath    = false;
@@ -70,6 +72,16 @@
     onValue(ref(db,'eliminated'),s => { eliminated = s.val()||{}; renderParticipants(); if(currentPlayer) checkEliminated(); });
     onValue(ref(db,'log'),       s => { const d=s.val(); renderLog(d?Object.values(d).reverse():[]); });
     onValue(ref(db,'kills'),     s => { const d=s.val(); renderKills(d?Object.values(d).reverse():[]); });
+    onValue(ref(db,'passwords'), s => {
+      const data = s.val() || {};
+      // Sobreescribir códigos base con los personalizados
+      Object.entries(data).forEach(([key, code]) => {
+        const name = PARTICIPANTS.find(n => sanitizeKey(n) === key);
+        if (name) PLAYER_CODES[name] = code;
+      });
+      passwords = data;
+      renderPasswordsList();
+    });
 
     // ── PARTICIPANTES ────────────────────────────────────────────
     function renderParticipants() {
@@ -153,6 +165,21 @@
       currentPlayer = null;
     };
 
+    function renderPasswordsList() {
+      const c = document.getElementById('passwords-list');
+      if (!c) return;
+      c.innerHTML = PARTICIPANTS.map(name => {
+        const key      = sanitizeKey(name);
+        const changed  = !!passwords[key];
+        const code     = PLAYER_CODES[name];
+        return `<div class="pw-entry">
+          <span class="pw-name">${name}</span>
+          <span class="pw-code">${code}</span>
+          <span class="pw-status ${changed ? 'changed' : ''}">${changed ? '✓ Cambiada' : 'Original'}</span>
+        </div>`;
+      }).join('');
+    }
+
     // ── ACCESO ───────────────────────────────────────────────────
     async function grantAccess(name) {
       const isNew = !claimed[sanitizeKey(name)];
@@ -160,6 +187,19 @@
       writeLog(name, isNew ? 'Primer acceso' : 'Reentrada con código');
       document.getElementById('screen-code').classList.remove('visible');
       document.getElementById('code-input').value = '';
+
+      if (isNew) {
+        // Primer acceso → pedir cambio de contraseña
+        document.getElementById('pw-change-name').textContent = name;
+        document.getElementById('screen-pwchange').classList.add('visible');
+        setTimeout(() => document.getElementById('pw-new').focus(), 100);
+      } else {
+        enterProfile(name);
+      }
+    }
+
+    function enterProfile(name) {
+      document.getElementById('screen-pwchange').classList.remove('visible');
       document.getElementById('success-name').textContent = name;
       renderMission(name);
       checkEliminated();
@@ -169,6 +209,42 @@
         document.getElementById('admin-panel').classList.add('visible');
       }
     }
+
+    // ── CAMBIO DE CONTRASEÑA ─────────────────────────────────────
+    window.submitNewPassword = async function() {
+      const newPw  = document.getElementById('pw-new').value;
+      const confPw = document.getElementById('pw-confirm').value;
+      const err    = document.getElementById('pw-error');
+
+      if (!/^\d{4}$/.test(newPw)) {
+        err.textContent = 'La contraseña debe ser exactamente 4 números.';
+        err.classList.add('visible'); return;
+      }
+      if (newPw !== confPw) {
+        err.textContent = 'Las contraseñas no coinciden.';
+        err.classList.add('visible');
+        document.getElementById('pw-confirm').value = '';
+        setTimeout(() => document.getElementById('pw-confirm').focus(), 100);
+        return;
+      }
+
+      // Guardar en Firebase
+      const key = sanitizeKey(currentPlayer);
+      await update(ref(db,'passwords'), { [key]: newPw });
+      PLAYER_CODES[currentPlayer] = newPw;
+      writeLog(currentPlayer, 'Contraseña actualizada');
+
+      err.classList.remove('visible');
+      document.getElementById('pw-new').value     = '';
+      document.getElementById('pw-confirm').value = '';
+      enterProfile(currentPlayer);
+    };
+
+    window.goBackFromPwChange = function() {
+      document.getElementById('screen-pwchange').classList.remove('visible');
+      document.getElementById('screen-select').style.display = '';
+      currentPlayer = null;
+    };
 
     // ── ELIMINADO ────────────────────────────────────────────────
     function checkEliminated() {
@@ -776,7 +852,64 @@
     .mission-label{font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold);opacity:.5;margin-bottom:3px;}
     .mission-value{font-family:'Playfair Display',serif;font-size:18px;color:var(--parchment);font-weight:700;}
 
-    /* Mensaje eliminado grande */
+    /* ── PANTALLA CAMBIO CONTRASEÑA (turquesa) ── */
+    .pwchange-screen {
+      display: none; flex-direction: column; gap: 20px;
+      animation: fadeIn 0.4s ease;
+    }
+    .pwchange-screen.visible { display: flex; }
+    .pwchange-header {
+      text-align: center;
+    }
+    .pwchange-title {
+      font-family: 'Playfair Display', serif; font-size: 22px; font-weight: 700;
+      color: #2dd4bf; text-shadow: 0 0 30px rgba(45,212,191,0.4);
+    }
+    .pwchange-subtitle {
+      font-size: 14px; color: rgba(45,212,191,0.7);
+      font-style: italic; margin-top: 6px; line-height: 1.6;
+    }
+    .pwchange-divider {
+      display: flex; align-items: center; gap: 12px;
+    }
+    .pwchange-divider-line {
+      flex: 1; height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(45,212,191,0.4), transparent);
+    }
+    .pw-field { display: flex; flex-direction: column; gap: 6px; }
+    .pw-label {
+      font-size: 10px; letter-spacing: 0.25em; text-transform: uppercase;
+      color: #2dd4bf; opacity: 0.6;
+    }
+    .pw-input {
+      background: rgba(0,0,0,0.5);
+      border: 1px solid rgba(45,212,191,0.3);
+      color: #2dd4bf;
+      font-family: 'Playfair Display', serif; font-size: 22px;
+      letter-spacing: 0.4em; text-align: center; padding: 12px;
+      outline: none; transition: border-color 0.2s; width: 100%;
+    }
+    .pw-input:focus { border-color: rgba(45,212,191,0.8); box-shadow: 0 0 20px rgba(45,212,191,0.1); }
+    .pw-input.error { border-color: var(--crimson); animation: shake 0.4s ease; }
+    .btn-pw-confirm {
+      width: 100%; padding: 14px; background: rgba(45,212,191,0.15);
+      border: 1px solid rgba(45,212,191,0.5); color: #2dd4bf;
+      font-family: 'Playfair Display', serif; font-size: 14px; font-weight: 700;
+      letter-spacing: 0.1em; text-transform: uppercase; cursor: pointer; transition: all 0.2s;
+    }
+    .btn-pw-confirm:hover { background: rgba(45,212,191,0.25); box-shadow: 0 0 20px rgba(45,212,191,0.15); }
+    .pw-error { color: var(--crimson); font-size: 13px; text-align: center; display: none; font-style: italic; }
+    .pw-error.visible { display: block; }
+
+    /* Passwords list in admin */
+    .pw-entry {
+      display: flex; align-items: center; gap: 10px; padding: 6px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.04); font-size: 12px;
+    }
+    .pw-name { flex: 1; font-style: italic; color: var(--parchment-dark); }
+    .pw-code { font-family: 'Playfair Display', serif; color: var(--gold); letter-spacing: 0.2em; }
+    .pw-status { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; opacity: 0.4; }
+    .pw-status.changed { color: #2dd4bf; opacity: 0.8; }
     .eliminated-notice {
       display: none; flex-direction: column; align-items: center;
       gap: 14px; text-align: center; width: 100%;
@@ -939,6 +1072,34 @@
     <button class="btn-back" onclick="goBack()">← Volver</button>
   </div>
 
+  <!-- PANTALLA 2B: CAMBIO DE CONTRASEÑA (primer acceso) -->
+
+  <div class="pwchange-screen" id="screen-pwchange">
+    <div class="pwchange-header">
+      <div class="pwchange-title">🔐 Crea tu contraseña</div>
+      <div class="pwchange-subtitle">
+        Es tu primera vez, <strong id="pw-change-name" style="color:#2dd4bf"></strong>.<br>
+        Elige una contraseña de 4 números que recuerdes.
+      </div>
+    </div>
+    <div class="pwchange-divider">
+      <div class="pwchange-divider-line"></div>
+      <span style="color:#2dd4bf;font-size:14px">🔒</span>
+      <div class="pwchange-divider-line"></div>
+    </div>
+    <div class="pw-field">
+      <span class="pw-label">Nueva contraseña</span>
+      <input type="password" class="pw-input" id="pw-new" maxlength="4" placeholder="····" inputmode="numeric" />
+    </div>
+    <div class="pw-field">
+      <span class="pw-label">Confirmar contraseña</span>
+      <input type="password" class="pw-input" id="pw-confirm" maxlength="4" placeholder="····" inputmode="numeric" />
+    </div>
+    <p class="pw-error" id="pw-error"></p>
+    <button class="btn-pw-confirm" onclick="submitNewPassword()">Confirmar contraseña</button>
+    <button class="btn-back" onclick="goBackFromPwChange()" style="border-color:rgba(45,212,191,0.2);color:rgba(45,212,191,0.5)">← Volver</button>
+  </div>
+
   <!-- PANTALLA 3: PERFIL -->
 
   <div class="success-screen" id="screen-success">
@@ -1028,6 +1189,8 @@
   <p class="admin-title">✦ Panel de control ✦</p>
   <button class="btn-randomize" onclick="randomizeMissions()">🎲 Randomizar misiones</button>
   <p class="randomize-status" id="randomize-status"></p>
+  <p class="admin-title" style="margin-bottom:8px">Contraseñas actuales</p>
+  <div id="passwords-list" style="margin-bottom:20px"></div>
   <p class="admin-title" style="margin-bottom:8px">Registro de muertes</p>
   <div id="kills-list" style="margin-bottom:20px"></div>
   <p class="admin-title" style="margin-bottom:8px">Registro de accesos</p>
