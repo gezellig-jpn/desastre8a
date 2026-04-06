@@ -219,17 +219,21 @@
       const container   = document.getElementById('mission-objetivos-container');
       const histSection = document.getElementById('history-section');
       const btnDet      = document.getElementById('btn-detective');
+      const actionZone  = document.getElementById('action-zone');
 
-      card.style.display = 'block';
+      const isDead = !!eliminated[sanitizeKey(name)];
+
+      card.style.display   = 'block';
+      card.style.opacity   = isDead ? '0.3' : '1';
+      actionZone.style.display = isDead ? 'none' : 'flex';
+      btnDet.style.display = 'none'; // se activa abajo solo si vivo y con misión
 
       if (mission && mission.objetivos.length > 0) {
         pending.style.display   = 'none';
         container.style.display = 'block';
-        btnDet.style.display    = 'block';
+        if (!isDead) btnDet.style.display = 'block';
 
-        // Renderizar cada objetivo con su propio botón de confirmar muerte
         container.innerHTML = mission.objetivos.map((obj, idx) => {
-          // Buscar co-cazadores: otros jugadores vivos que comparten este mismo objetivo
           const coHunters = PARTICIPANTS.filter(p => {
             if (p === name) return false;
             if (eliminated[sanitizeKey(p)]) return false;
@@ -246,6 +250,22 @@
                 </div>
                </div>`
             : '';
+
+          // Botón de confirmar muerte solo si vivo
+          const deathButtonHTML = isDead ? '' : `
+            <div class="obj-death-wrap">
+              <button class="btn-death" style="display:block;margin-top:0" onclick="toggleObjDeathPanel(${idx})">💀 Confirmar muerte</button>
+              <div class="death-panel" id="obj-death-panel-${idx}">
+                <p class="panel-title">Confirmar eliminación</p>
+                <p class="panel-message">Pide a <strong>${obj.objetivo}</strong> su código personal.</p>
+                <div class="death-input-wrap">
+                  <input type="password" class="death-input" id="obj-death-input-${idx}" maxlength="4" placeholder="····" inputmode="numeric" />
+                  <button class="btn-death-confirm" onclick="checkObjDeathCode(${idx})">Confirmar</button>
+                </div>
+                <p class="death-error" id="obj-death-error-${idx}"></p>
+                <button class="btn-cancel" onclick="toggleObjDeathPanel(${idx})">← Cancelar</button>
+              </div>
+            </div>`;
 
           return `
           <div class="objetivo-block" id="obj-block-${idx}">
@@ -264,19 +284,7 @@
               </div>
             </div>
             ${coHunterHTML}
-            <div class="obj-death-wrap">
-              <button class="btn-death" style="display:block;margin-top:0" onclick="toggleObjDeathPanel(${idx})">💀 Confirmar muerte</button>
-              <div class="death-panel" id="obj-death-panel-${idx}">
-                <p class="panel-title">Confirmar eliminación</p>
-                <p class="panel-message">Pide a <strong>${obj.objetivo}</strong> su código personal.</p>
-                <div class="death-input-wrap">
-                  <input type="password" class="death-input" id="obj-death-input-${idx}" maxlength="4" placeholder="····" inputmode="numeric" />
-                  <button class="btn-death-confirm" onclick="checkObjDeathCode(${idx})">Confirmar</button>
-                </div>
-                <p class="death-error" id="obj-death-error-${idx}"></p>
-                <button class="btn-cancel" onclick="toggleObjDeathPanel(${idx})">← Cancelar</button>
-              </div>
-            </div>
+            ${deathButtonHTML}
           </div>
           ${idx < mission.objetivos.length - 1 ? '<div class="obj-separator"></div>' : ''}
         `}).join('');
