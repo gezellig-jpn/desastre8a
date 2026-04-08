@@ -471,27 +471,30 @@
     };
 
     async function executeKill(killer, objIdx, victim, arma, lugar) {
-      const killerKey     = sanitizeKey(killer);
-      const victimKey     = sanitizeKey(victim);
+      const killerKey      = sanitizeKey(killer);
+      const victimKey      = sanitizeKey(victim);
+      const victimMission  = getMission(victim);
       const now = new Date();
       const timeStr = now.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'});
       const dateStr = now.toLocaleDateString('es-ES',{day:'2-digit',month:'2-digit'});
 
-      // Marcar víctima como eliminada PRIMERO para que resolveTarget la ignore
+      // Muerte normal: heredas EXACTAMENTE el primer objetivo de tu víctima, sin seguir cadena
+      const inheritedObj = victimMission && victimMission.objetivos.length > 0
+        ? victimMission.objetivos[0]
+        : { objetivo: '— Sin objetivo —', arma: arma, lugar: lugar };
+
+      // 1. Marcar víctima como eliminada
       await update(ref(db, 'eliminated'), { [victimKey]: 'killed' });
 
-      // Resolver el siguiente objetivo vivo siguiendo la cadena desde la víctima
-      const resolvedObj = resolveTarget(victim);
-      const inheritedObj = resolvedObj || { objetivo: '— Sin objetivo —', arma: arma, lugar: lugar };
-
-      // 1. Actualizar misión del asesino — reemplazar slot idx con el heredado
+      // 2. Actualizar misión del asesino — reemplazar slot con el heredado directo
       const currentMission = getMission(killer);
       const newObjetivos   = [...currentMission.objetivos];
       newObjetivos[objIdx] = { objetivo: inheritedObj.objetivo, arma: inheritedObj.arma, lugar: inheritedObj.lugar };
       const newHistory     = [...currentMission.history, { victim, arma, lugar }];
       await set(ref(db, `missions/${killerKey}`), { objetivos: newObjetivos, history: newHistory });
 
-      // 2. Redistribuir a todos los que tenían a la víctima como objetivo → siguiente vivo en cadena
+      // 3. Redistribuir a quienes tenían a la víctima como objetivo
+      // En muerte normal también heredan el objetivo directo de la víctima (sin cadena)
       const updates = {};
       PARTICIPANTS.forEach(name => {
         if (name === killer || name === victim) return;
@@ -504,13 +507,12 @@
       });
       if (Object.keys(updates).length > 0) await update(ref(db), updates);
 
-      // 3. Log, registro y timestamp de muerte (para ventana detective 2min)
-      const killTimestamp = now.getTime();
+      // 4. Log, timestamp para ventana detective
       push(ref(db,'kills'), { killer, victim, arma, lugar, date: dateStr, time: timeStr });
-      await update(ref(db,'killTimestamps'), { [sanitizeKey(victim)]: killTimestamp });
+      await update(ref(db,'killTimestamps'), { [sanitizeKey(victim)]: now.getTime() });
       writeLog(`${killer} eliminó a ${victim}`, '💀 Muerte');
 
-      // 4. Overlay
+      // 5. Overlay
       document.querySelectorAll('.death-panel').forEach(p => p.classList.remove('visible'));
       document.getElementById('death-success-name').textContent = victim;
       document.getElementById('death-success-next').textContent = inheritedObj.objetivo;
@@ -589,21 +591,29 @@
       const correct = correctCurrent || correctRecent;
 
       if (correct) {
-        // Si la víctima ya fue matada recientemente (está muerta), preguntar
+        // Auto-detectar si la víctima ya está muerta en Firebase
         const victimaDead = !!eliminated[sanitizeKey(victima)];
         document.getElementById('detective-guess-result').textContent =
           `¡Correcto! ${asesino} iba a matar a ${victima} con ${arma} en ${lugar}.`;
         document.getElementById('detective-guess-result').style.display = 'block';
         document.getElementById('btn-det-submit').style.display = 'none';
+        document.getElementById('detective-victim-question').style.display = 'none';
 
         if (victimaDead) {
-          // Víctima ya está muerta — preguntar si ocurrió en este momento o fue antes
-          document.getElementById('detective-victim-question').style.display = 'block';
-          document.getElementById('detective-code-wrap').style.display = 'none';
-        } else {
-          // Víctima viva — pedir código de la víctima para confirmar
-          document.getElementById('detective-victim-question').style.display = 'none';
+          // Víctima ya muerta → ejecutar directamente sin pedir código
+          window._pendingDetectiveVictimaDead = true;
           document.getElementById('detective-code-wrap').style.display = 'flex';
+          // Mostrar aviso en lugar de pedir código
+          document.getElementById('detective-code-input').placeholder = 'Confirmar';
+          document.getElementById('detective-code-input').value = '__AUTO__';
+          // Ejecutar automáticamente tras breve pausa
+          setTimeout(() => window.checkDetectiveCode(), 800);
+        } else {
+          // Víctima viva → pedir su código
+          window._pendingDetectiveVictimaDead = false;
+          document.getElementById('detective-code-wrap').style.display = 'flex';
+          document.getElementById('detective-code-input').value = '';
+          document.getElementById('detective-code-input').placeholder = '····';
           setTimeout(() => document.getElementById('detective-code-input').focus(), 100);
         }
       } else {
@@ -726,84 +736,105 @@
     }
 
     window.checkDetectiveCode = async function() {
-      const val     = document.getElementById('detective-code-input').value;
-      const input   = document.getElementById('detective-code-input');
-      const err     = document.getElementById('detective-error');
       const victima = document.getElementById('det-victima').value;
       const asesino = document.getElementById('det-asesino').value;
       const arma    = document.getElementById('det-arma').value;
       const lugar   = document.getElementById('det-lugar').value;
+      const input   = document.getElementById('detective-code-input');
+      const err     = document.getElementById('detective-error');
 
-      if (val !== PLAYER_CODES[victima]) {
-        triggerError(input, err, 'Código de la víctima incorrecto.'); return;
+      const victimaDead = window._pendingDetectiveVictimaDead;
+
+      // Si víctima viva → verificar código introducido
+      if (!victimaDead) {
+        const val = input.value;
+        if (val !== PLAYER_CODES[victima]) {
+          triggerError(input, err, 'Código de la víctima incorrecto.'); return;
+        }
       }
 
-      const detKey        = sanitizeKey(currentPlayer);
-      const victimKey     = sanitizeKey(victima);
-      const asesinKey     = sanitizeKey(asesino);
-      const myMission     = getMission(currentPlayer);
-      const now = new Date();
-      const timeStr = now.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'});
-      const dateStr = now.toLocaleDateString('es-ES',{day:'2-digit',month:'2-digit'});
+      const detKey    = sanitizeKey(currentPlayer);
+      const victimKey = sanitizeKey(victima);
+      const asesinKey = sanitizeKey(asesino);
+      const myMission = getMission(currentPlayer);
+      const now       = new Date();
+      const timeStr   = now.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'});
+      const dateStr   = now.toLocaleDateString('es-ES',{day:'2-digit',month:'2-digit'});
 
-      // Marcar eliminados PRIMERO para que resolveTarget los ignore en la cadena
-      const allUpdates = {};
-      allUpdates[`eliminated/${victimKey}`]  = 'killed';
-      allUpdates[`eliminated/${asesinKey}`]  = 'caught';
-      await update(ref(db), allUpdates);
+      const redistUpdates = {};
 
-      // Resolver siguiente objetivo vivo desde la víctima (saltando muertos)
-      const extraObj = resolveTarget(victima) || { objetivo: '— Sin objetivo —', arma: arma, lugar: lugar };
+      // Marcar asesino como pillado. Víctima: solo si no estaba ya muerta
+      redistUpdates[`eliminated/${asesinKey}`] = 'caught';
+      if (!victimaDead) redistUpdates[`eliminated/${victimKey}`] = 'killed';
+      await update(ref(db), redistUpdates);
 
-      // Resolver siguiente objetivo vivo desde el asesino (saltando muertos)
+      // Para acusación: seguir cadena hasta primer vivo desde el asesino
+      // (El detective hereda lo que hubiera sido el siguiente objetivo vivo del asesino)
+      const extraObj = resolveTarget(asesino) || { objetivo: '— Sin objetivo —', arma, lugar };
+
+      // Resolver siguiente vivo desde asesino para redistribuir a quien lo tenía como objetivo
       const asesinResolved = resolveTarget(asesino);
 
-      // Detective: mantiene sus objetivos + añade el resuelto de la víctima
+      // Resolver siguiente vivo desde víctima (si aplica) para redistribuir
+      const victimResolved = victimaDead ? null : resolveTarget(victima);
+
+      // Detective: mantiene sus objetivos + añade el resuelto del asesino
       const currentObjetivos = myMission ? myMission.objetivos : [];
       const newObjetivos = [...currentObjetivos, extraObj];
       const newHistory   = [...(myMission ? myMission.history : []),
-        { victim: `${victima} (víctima de ${asesino})`, arma: '(detective)', lugar: '(detective)' }
+        { victim: victimaDead
+            ? `${asesino} (pillado, víctima ${victima} ya estaba muerta)`
+            : `${victima} (víctima de ${asesino})`,
+          arma: '(detective)', lugar: '(detective)' }
       ];
 
-      const redistUpdates = {};
-      redistUpdates[`missions/${detKey}`] = { objetivos: newObjetivos, history: newHistory };
+      const finalUpdates = {};
+      finalUpdates[`missions/${detKey}`] = { objetivos: newObjetivos, history: newHistory };
 
-      // Redistribuir a quien tenía al asesino → siguiente vivo desde asesino
+      // Redistribuir a quien tenía al asesino como objetivo → siguiente vivo desde asesino
       if (asesinResolved) {
         PARTICIPANTS.forEach(name => {
           if (name === currentPlayer || name === asesino || name === victima) return;
           const m = getMission(name);
           if (!m || !m.objetivos.some(o => o.objetivo === asesino)) return;
-          redistUpdates[`missions/${sanitizeKey(name)}`] = {
+          finalUpdates[`missions/${sanitizeKey(name)}`] = {
             objetivos: m.objetivos.map(o => o.objetivo === asesino ? asesinResolved : o),
             history: m.history
           };
         });
       }
 
-      // Redistribuir a quien tenía a la víctima → siguiente vivo desde víctima
-      PARTICIPANTS.forEach(name => {
-        if (name === currentPlayer || name === asesino || name === victima) return;
-        const m = getMission(name);
-        if (!m || !m.objetivos.some(o => o.objetivo === victima)) return;
-        const existing = redistUpdates[`missions/${sanitizeKey(name)}`];
-        const base = existing || { objetivos: m.objetivos, history: m.history };
-        redistUpdates[`missions/${sanitizeKey(name)}`] = {
-          objetivos: base.objetivos.map(o => o.objetivo === victima ? extraObj : o),
-          history: base.history
-        };
-      });
+      // Si víctima viva: redistribuir a quien la tenía como objetivo → siguiente vivo desde víctima
+      if (!victimaDead && victimResolved) {
+        PARTICIPANTS.forEach(name => {
+          if (name === currentPlayer || name === asesino || name === victima) return;
+          const m = getMission(name);
+          if (!m || !m.objetivos.some(o => o.objetivo === victima)) return;
+          const existing = finalUpdates[`missions/${sanitizeKey(name)}`];
+          const base = existing || { objetivos: m.objetivos, history: m.history };
+          finalUpdates[`missions/${sanitizeKey(name)}`] = {
+            objetivos: base.objetivos.map(o => o.objetivo === victima ? victimResolved : o),
+            history: base.history
+          };
+        });
+      }
 
-      await update(ref(db), redistUpdates);
-      push(ref(db,'kills'), { killer: `${currentPlayer} (detective)`, victim: `${asesino} + ${victima}`, arma, lugar, date: dateStr, time: timeStr });
-      writeLog(`${currentPlayer} pilló a ${asesino} matando a ${victima}`, '🔍 Detective');
+      await update(ref(db), finalUpdates);
+
+      const killLabel = victimaDead
+        ? `${currentPlayer} (detective)` : `${currentPlayer} (detective)`;
+      const victimLabel = victimaDead ? asesino : `${asesino} + ${victima}`;
+      push(ref(db,'kills'), { killer: killLabel, victim: victimLabel, arma, lugar, date: dateStr, time: timeStr });
+      writeLog(`${currentPlayer} pilló a ${asesino}${victimaDead ? '' : ` matando a ${victima}`}`, '🔍 Detective');
 
       document.getElementById('detective-panel').classList.remove('visible');
       showingDetective = false;
       document.getElementById('btn-det-submit').style.display = 'block';
+      input.value = '';
+      input.placeholder = '····';
 
       const nextNames = newObjetivos.map(o => o.objetivo).join(' y ');
-      document.getElementById('death-success-name').textContent = `${asesino} y ${victima}`;
+      document.getElementById('death-success-name').textContent = victimLabel;
       document.getElementById('death-success-next').textContent = nextNames;
       document.getElementById('death-success-panel').classList.add('visible');
     };
