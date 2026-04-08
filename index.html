@@ -58,7 +58,8 @@
     let claimed    = {};
     let missions   = {};
     let eliminated = {};
-    let passwords  = {}; // contraseñas personalizadas guardadas en Firebase
+    let passwords  = {};
+    let killTimestamps = {};
     let currentPlayer   = null;
     let adminVisible    = false;
     let showingDeath    = false;
@@ -67,11 +68,12 @@
     function sanitizeKey(n) { return n.replace(/[.#$\/\[\] ]/g, '_'); }
 
     // ── FIREBASE ─────────────────────────────────────────────────
-    onValue(ref(db,'claimed'),   s => { claimed    = s.val()||{}; renderParticipants(); document.getElementById('loading').classList.add('hidden'); });
-    onValue(ref(db,'missions'),  s => { missions   = s.val()||{}; if(currentPlayer) renderMission(currentPlayer); });
-    onValue(ref(db,'eliminated'),s => { eliminated = s.val()||{}; renderParticipants(); if(currentPlayer) checkEliminated(); });
-    onValue(ref(db,'log'),       s => { const d=s.val(); renderLog(d?Object.values(d).reverse():[]); });
-    onValue(ref(db,'kills'),     s => { const d=s.val(); renderKills(d?Object.values(d).reverse():[]); });
+    onValue(ref(db,'claimed'),       s => { claimed    = s.val()||{}; renderParticipants(); document.getElementById('loading').classList.add('hidden'); });
+    onValue(ref(db,'missions'),      s => { missions   = s.val()||{}; if(currentPlayer) renderMission(currentPlayer); });
+    onValue(ref(db,'eliminated'),    s => { eliminated = s.val()||{}; renderParticipants(); renderRemoveList(); if(currentPlayer) checkEliminated(); });
+    onValue(ref(db,'log'),           s => { const d=s.val(); renderLog(d?Object.values(d).reverse():[]); });
+    onValue(ref(db,'kills'),         s => { const d=s.val(); renderKills(d?Object.values(d).reverse():[]); });
+    onValue(ref(db,'killTimestamps'),s => { killTimestamps = s.val()||{}; });
     onValue(ref(db,'passwords'), s => {
       const data = s.val() || {};
       // Sobreescribir códigos base con los personalizados
@@ -89,24 +91,25 @@
       if (!list) return;
       list.innerHTML = '';
       PARTICIPANTS.forEach(name => {
-        const key    = sanitizeKey(name);
-        const dead   = eliminated[key] === 'killed';
-        const caught = eliminated[key] === 'caught';
-        const out    = dead || caught;
-        const btn    = document.createElement('button');
+        const key     = sanitizeKey(name);
+        const val     = eliminated[key];
+        if (val === 'removed') return; // no mostrar retirados
+        const dead    = val === 'killed';
+        const caught  = val === 'caught';
+        const out     = dead || caught;
+        const btn     = document.createElement('button');
         btn.className = 'participant-btn' + (out ? ' dead' : '');
-        btn.innerHTML = dead
-          ? `<span>${name}</span><span class="lock-icon">💀</span>`
-          : caught
-            ? `<span>${name}</span><span class="lock-icon">🔍</span>`
-            : `<span>${name}</span>`;
+        btn.innerHTML = dead    ? `<span>${name}</span><span class="lock-icon">💀</span>`
+                      : caught  ? `<span>${name}</span><span class="lock-icon">🔍</span>`
+                      :           `<span>${name}</span>`;
         btn.onclick = () => selectParticipant(name);
         list.appendChild(btn);
       });
-      if (PARTICIPANTS.length % 3 === 2) {
+      // Centra última fila si quedan 2 en ella
+      const btns = list.querySelectorAll('.participant-btn');
+      if (btns.length % 3 === 2) {
         const spacer = document.createElement('div');
         spacer.className = 'grid-spacer';
-        const btns = list.querySelectorAll('.participant-btn');
         list.insertBefore(spacer, btns[btns.length - 2]);
       }
     }
@@ -164,6 +167,18 @@
       document.getElementById('screen-select').style.display = '';
       currentPlayer = null;
     };
+
+    function renderRemoveList() {
+      const c = document.getElementById('remove-list');
+      if (!c) return;
+      const active = PARTICIPANTS.filter(n => eliminated[sanitizeKey(n)] !== 'removed');
+      c.innerHTML = active.map(name => `
+        <div class="pw-entry">
+          <span class="pw-name">${name}</span>
+          <span class="pw-status ${eliminated[sanitizeKey(name)] ? 'changed' : ''}">${eliminated[sanitizeKey(name)] ? '💀' : 'Activo'}</span>
+          <button class="btn-pw-edit" onclick="removeParticipant('${name}')">🚫</button>
+        </div>`).join('');
+    }
 
     function renderPasswordsList() {
       const c = document.getElementById('passwords-list');
@@ -278,25 +293,22 @@
     function checkEliminated() {
       if (!currentPlayer) return;
       const val  = eliminated[sanitizeKey(currentPlayer)];
-      const dead = val === 'killed' || val === 'caught';
+      const dead = val === 'killed' || val === 'caught' || val === 'removed';
 
-      // Zona de acciones
       document.getElementById('action-zone').style.display = dead ? 'none' : 'flex';
-
-      // Mensaje pequeño antiguo — ya no lo usamos, ocultarlo
       document.getElementById('dead-notice').style.display = 'none';
 
-      // Mensaje grande de eliminado
       const bigNotice = document.getElementById('eliminated-notice');
       if (dead) {
         bigNotice.style.display = 'flex';
         document.getElementById('eliminated-reason').textContent =
-          val === 'caught' ? 'Has sido pillado.' : 'Has sido asesinado.';
+          val === 'caught'  ? 'Has sido pillado.' :
+          val === 'removed' ? 'Has sido retirado del juego.' :
+                              'Has sido asesinado.';
       } else {
         bigNotice.style.display = 'none';
       }
 
-      // Atenuar tarjeta de misión si está eliminado
       const missionCard = document.getElementById('mission-card');
       if (missionCard) missionCard.style.opacity = dead ? '0.3' : '1';
     }
@@ -492,8 +504,10 @@
       });
       if (Object.keys(updates).length > 0) await update(ref(db), updates);
 
-      // 3. Log y registro
+      // 3. Log, registro y timestamp de muerte (para ventana detective 2min)
+      const killTimestamp = now.getTime();
       push(ref(db,'kills'), { killer, victim, arma, lugar, date: dateStr, time: timeStr });
+      await update(ref(db,'killTimestamps'), { [sanitizeKey(victim)]: killTimestamp });
       writeLog(`${killer} eliminó a ${victim}`, '💀 Muerte');
 
       // 4. Overlay
@@ -515,15 +529,25 @@
       if (showingDetective) {
         populateDetectiveSelects();
         document.getElementById('detective-code-wrap').style.display = 'none';
+        document.getElementById('detective-victim-question').style.display = 'none';
         document.getElementById('detective-error').classList.remove('visible');
         document.getElementById('detective-guess-result').classList.remove('visible');
         document.getElementById('detective-guess-result').style.display = 'none';
+        document.getElementById('btn-det-submit').style.display = 'block';
       }
     };
 
     function populateDetectiveSelects() {
-      const alive = PARTICIPANTS.filter(n => !eliminated[sanitizeKey(n)]);
-      document.getElementById('det-asesino').innerHTML = '<option value="">— Selecciona —</option>' + alive.map(n=>`<option value="${n}">${n}</option>`).join('');
+      const myMission = getMission(currentPlayer);
+      const myTargets = myMission ? myMission.objetivos.map(o => o.objetivo) : [];
+      // Excluir al propio detective, sus co-objetivos y eliminados
+      const accusable = PARTICIPANTS.filter(n =>
+        n !== currentPlayer &&
+        !eliminated[sanitizeKey(n)] &&
+        !myTargets.includes(n)
+      );
+      const alive = PARTICIPANTS.filter(n => !eliminated[sanitizeKey(n)] && n !== currentPlayer);
+      document.getElementById('det-asesino').innerHTML = '<option value="">— Selecciona —</option>' + accusable.map(n=>`<option value="${n}">${n}</option>`).join('');
       document.getElementById('det-arma').innerHTML    = '<option value="">— Selecciona —</option>' + OBJETOS.map(o=>`<option value="${o}">${o}</option>`).join('');
       document.getElementById('det-lugar').innerHTML   = '<option value="">— Selecciona —</option>' + LUGARES.map(l=>`<option value="${l}">${l}</option>`).join('');
       document.getElementById('det-victima').innerHTML = '<option value="">— Selecciona —</option>' + alive.map(n=>`<option value="${n}">${n}</option>`).join('');
@@ -540,10 +564,6 @@
         err.textContent = 'Debes seleccionar todas las opciones.';
         err.classList.add('visible'); return;
       }
-      if (asesino === currentPlayer) {
-        err.textContent = 'No puedes acusarte a ti mismo.';
-        err.classList.add('visible'); return;
-      }
       if (victima === currentPlayer) {
         err.textContent = 'No puedes ser la víctima.';
         err.classList.add('visible'); return;
@@ -551,41 +571,62 @@
 
       err.classList.remove('visible');
       const asesinMission = getMission(asesino);
-      // Comprobar si alguno de los objetivos del asesino coincide
-      const correct = asesinMission && asesinMission.objetivos.some(o =>
+      const WINDOW_MS     = 2 * 60 * 1000;
+      const nowMs         = Date.now();
+
+      // Ventana reciente: el asesino mató a la víctima hace menos de 2 minutos
+      const victimTS         = killTimestamps[sanitizeKey(victima)];
+      const withinWindow     = victimTS && (nowMs - victimTS) <= WINDOW_MS;
+      const asesinHistory    = asesinMission ? (asesinMission.history || []) : [];
+      const killedByAsesino  = asesinHistory.some(h => h.victim === victima && h.arma === arma && h.lugar === lugar);
+      const correctRecent    = withinWindow && killedByAsesino;
+
+      // Objetivo actual del asesino coincide
+      const correctCurrent   = asesinMission && asesinMission.objetivos.some(o =>
         o.objetivo === victima && o.arma === arma && o.lugar === lugar
       );
 
+      const correct = correctCurrent || correctRecent;
+
       if (correct) {
-        const guessEl = document.getElementById('detective-guess-result');
-        guessEl.textContent = `¡Correcto! ${asesino} iba a matar a ${victima} con ${arma} en ${lugar}.`;
-        guessEl.style.display = 'block';
-        document.getElementById('detective-code-wrap').style.display = 'flex';
-        document.getElementById('detective-code-input').value = '';
+        // Si la víctima ya fue matada recientemente (está muerta), preguntar
+        const victimaDead = !!eliminated[sanitizeKey(victima)];
+        document.getElementById('detective-guess-result').textContent =
+          `¡Correcto! ${asesino} iba a matar a ${victima} con ${arma} en ${lugar}.`;
+        document.getElementById('detective-guess-result').style.display = 'block';
         document.getElementById('btn-det-submit').style.display = 'none';
-        setTimeout(() => document.getElementById('detective-code-input').focus(), 100);
+
+        if (victimaDead) {
+          // Víctima ya está muerta — preguntar si ocurrió en este momento o fue antes
+          document.getElementById('detective-victim-question').style.display = 'block';
+          document.getElementById('detective-code-wrap').style.display = 'none';
+        } else {
+          // Víctima viva — pedir código de la víctima para confirmar
+          document.getElementById('detective-victim-question').style.display = 'none';
+          document.getElementById('detective-code-wrap').style.display = 'flex';
+          setTimeout(() => document.getElementById('detective-code-input').focus(), 100);
+        }
       } else {
+        // Acusación incorrecta — el detective muere
         err.textContent = 'Incorrecto. Tu acusación era errónea... y ahora tú también morirás.';
         err.classList.add('visible');
         setTimeout(async () => {
           const detKey    = sanitizeKey(currentPlayer);
           const myMission = getMission(currentPlayer);
 
-          // El objetivo del detective pasa al acusado
-          if (myMission && myMission.objetivos.length > 0) {
-            const asesinMission  = getMission(asesino);
-            const currentAsesin  = asesinMission ? asesinMission.objetivos : [];
-            const allAsesinObjs  = [...currentAsesin, ...myMission.objetivos];
-            const asesinHistory  = asesinMission ? asesinMission.history : [];
-            await set(ref(db, `missions/${sanitizeKey(asesino)}`), {
-              objetivos: allAsesinObjs,
-              history:   asesinHistory
-            });
-          }
-
-          // Redistribuir a cualquiera que tuviera al detective como objetivo
+          // El objetivo del detective pasa al asesino acusado falsamente
           const redistUpdates = {};
-          const detInherited = myMission && myMission.objetivos.length > 0 ? myMission.objetivos[0] : null;
+          if (myMission && myMission.objetivos.length > 0) {
+            const currentAsesin = asesinMission ? asesinMission.objetivos : [];
+            redistUpdates[`missions/${sanitizeKey(asesino)}`] = {
+              objetivos: [...currentAsesin, ...myMission.objetivos],
+              history:   asesinMission ? asesinMission.history : []
+            };
+          }
+          // Quien tenía al detective como objetivo hereda su primer obj vivo
+          const detInherited = myMission && myMission.objetivos.length > 0
+            ? resolveTarget(myMission.objetivos[0].objetivo) || myMission.objetivos[0]
+            : null;
           if (detInherited) {
             PARTICIPANTS.forEach(name => {
               if (name === currentPlayer) return;
@@ -600,18 +641,89 @@
           redistUpdates[`eliminated/${detKey}`] = 'caught';
           await update(ref(db), redistUpdates);
 
+          const nowDate = new Date();
           writeLog(`${currentPlayer} falló como detective`, '💀 Eliminado');
           push(ref(db,'kills'), {
             killer: `${asesino} (acusación fallida de ${currentPlayer})`,
             victim: currentPlayer, arma: '—', lugar: '—',
-            date: new Date().toLocaleDateString('es-ES',{day:'2-digit',month:'2-digit'}),
-            time: new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})
+            date: nowDate.toLocaleDateString('es-ES',{day:'2-digit',month:'2-digit'}),
+            time: nowDate.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})
           });
           document.getElementById('detective-panel').classList.remove('visible');
           showingDetective = false;
         }, 2000);
       }
     };
+
+    // Respuesta a "¿la víctima ha muerto ahora mismo?"
+    window.answerVictimDead = function(isDead) {
+      document.getElementById('detective-victim-question').style.display = 'none';
+      if (isDead) {
+        // Ha muerto → pedir código de la víctima
+        document.getElementById('detective-code-wrap').style.display = 'flex';
+        setTimeout(() => document.getElementById('detective-code-input').focus(), 100);
+      } else {
+        // No ha muerto → solo eliminar al asesino, objetivo pasa a aleatorio vivo
+        const asesino = document.getElementById('det-asesino').value;
+        executeDetectiveNoKill(asesino);
+      }
+    };
+
+    async function executeDetectiveNoKill(asesino) {
+      const asesinKey     = sanitizeKey(asesino);
+      const asesinMission = getMission(asesino);
+      const now           = new Date();
+      const timeStr       = now.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'});
+      const dateStr       = now.toLocaleDateString('es-ES',{day:'2-digit',month:'2-digit'});
+
+      // Objetivo del asesino pasa a un participante vivo aleatorio
+      const aliveOthers = PARTICIPANTS.filter(n =>
+        n !== asesino && n !== currentPlayer && !eliminated[sanitizeKey(n)]
+      );
+      const randomRecipient = aliveOthers[Math.floor(Math.random() * aliveOthers.length)];
+      const recipientMission = getMission(randomRecipient);
+
+      const redistUpdates = {};
+      redistUpdates[`eliminated/${asesinKey}`] = 'caught';
+
+      if (asesinMission && asesinMission.objetivos.length > 0 && randomRecipient) {
+        const recipientObjs = recipientMission ? recipientMission.objetivos : [];
+        redistUpdates[`missions/${sanitizeKey(randomRecipient)}`] = {
+          objetivos: [...recipientObjs, ...asesinMission.objetivos],
+          history:   recipientMission ? recipientMission.history : []
+        };
+      }
+
+      // Quien tenía al asesino como objetivo → siguiente vivo en cadena
+      const asesinResolved = resolveTarget(asesino);
+      if (asesinResolved) {
+        PARTICIPANTS.forEach(name => {
+          if (name === asesino) return;
+          const m = getMission(name);
+          if (!m || !m.objetivos.some(o => o.objetivo === asesino)) return;
+          redistUpdates[`missions/${sanitizeKey(name)}`] = {
+            objetivos: m.objetivos.map(o => o.objetivo === asesino ? asesinResolved : o),
+            history: m.history
+          };
+        });
+      }
+
+      await update(ref(db), redistUpdates);
+      push(ref(db,'kills'), {
+        killer: `${currentPlayer} (detective, sin víctima)`,
+        victim: asesino, arma: '—', lugar: '—', date: dateStr, time: timeStr
+      });
+      writeLog(`${currentPlayer} pilló a ${asesino} (sin víctima muerta)`, '🔍 Detective');
+
+      document.getElementById('detective-panel').classList.remove('visible');
+      showingDetective = false;
+      document.getElementById('btn-det-submit').style.display = 'block';
+
+      document.getElementById('death-success-name').textContent = asesino;
+      document.getElementById('death-success-next').textContent =
+        randomRecipient ? `Objetivos de ${asesino} → ${randomRecipient}` : '—';
+      document.getElementById('death-success-panel').classList.add('visible');
+    }
 
     window.checkDetectiveCode = async function() {
       const val     = document.getElementById('detective-code-input').value;
@@ -766,6 +878,36 @@
     // ── ADMIN ────────────────────────────────────────────────────
     window.resetGame = function() {
       if (confirm('¿Resetear todos los datos?')) set(ref(db,'/'), null);
+    };
+
+    // ── QUITAR PARTICIPANTE ───────────────────────────────────────
+    window.removeParticipant = async function(name) {
+      if (!confirm(`¿Quitar a ${name} del juego? Su objetivo pasará a quien lo tenía como objetivo.`)) return;
+
+      const key     = sanitizeKey(name);
+      const mission = getMission(name);
+
+      // Marcar como eliminado
+      await update(ref(db,'eliminated'), { [key]: 'removed' });
+
+      // Redistribuir a quien tenía a esta persona como objetivo → siguiente vivo en cadena
+      const inherited = resolveTarget(name);
+      if (inherited) {
+        const updates = {};
+        PARTICIPANTS.forEach(p => {
+          if (p === name) return;
+          const m = getMission(p);
+          if (!m || !m.objetivos.some(o => o.objetivo === name)) return;
+          updates[`missions/${sanitizeKey(p)}`] = {
+            objetivos: m.objetivos.map(o => o.objetivo === name ? inherited : o),
+            history: m.history
+          };
+        });
+        if (Object.keys(updates).length > 0) await update(ref(db), updates);
+      }
+
+      writeLog(`Admin quitó a ${name} del juego`, '🚫 Retirado');
+      renderRemoveList();
     };
     window.randomizeMissions = function() {
       if (!confirm('¿Asignar misiones aleatorias?')) return;
@@ -1226,7 +1368,15 @@
     </div>
     <p class="detective-error" id="detective-error"></p>
     <p class="detective-guess-result" id="detective-guess-result"></p>
-    <!-- Código víctima (aparece si acertó) -->
+    <!-- Pregunta: ¿la víctima ha muerto? -->
+    <div id="detective-victim-question" style="display:none;flex-direction:column;gap:10px">
+      <p class="panel-message" style="color:var(--gold)">¿La víctima ha muerto en este momento?</p>
+      <div style="display:flex;gap:8px">
+        <button class="btn-death-confirm" style="flex:1" onclick="answerVictimDead(true)">Sí, ha muerto</button>
+        <button class="btn-cancel" style="flex:1" onclick="answerVictimDead(false)">No, sigue viva</button>
+      </div>
+    </div>
+    <!-- Código víctima (aparece si acertó y víctima viva o confirmó muerte) -->
     <div class="detective-code-wrap" id="detective-code-wrap" style="display:none">
       <input type="password" class="death-input" id="detective-code-input" maxlength="4" placeholder="····" inputmode="numeric" />
       <button class="btn-death-confirm" onclick="checkDetectiveCode()">Confirmar</button>
@@ -1267,6 +1417,10 @@
   <p class="admin-title" style="margin-bottom:8px">Registro de accesos</p>
   <div id="log-list"></div>
   <button class="btn-reset" onclick="resetGame()">⚠ Resetear todos los datos</button>
+  <div style="height:16px"></div>
+  <p class="admin-title" style="margin-bottom:8px">Quitar participantes</p>
+  <p style="font-size:11px;color:var(--parchment-dark);opacity:0.5;font-style:italic;margin-bottom:10px;text-align:center">Al quitar a alguien su objetivo pasa a quien lo tenía asignado.</p>
+  <div id="remove-list"></div>
 </div>
 ```
 
